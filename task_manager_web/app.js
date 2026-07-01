@@ -143,8 +143,9 @@ const refs = {
   taskList: byId("taskList"),
   tagList: byId("tagList"),
   searchInput: byId("searchInput"),
-  priorityFilter: byId("priorityFilter"),
-  sortSelect: byId("sortSelect"),
+  priorityMenuLabel: byId("priorityMenuLabel"),
+  sortMenuLabel: byId("sortMenuLabel"),
+  customSelects: Array.from(document.querySelectorAll(".custom-select")),
   viewTitle: byId("viewTitle"),
   viewSubtitle: byId("viewSubtitle"),
   taskModal: byId("taskModal"),
@@ -160,6 +161,8 @@ const refs = {
   taskPinned: byId("taskPinned"),
   subtaskFields: byId("subtaskFields"),
   deleteTask: byId("deleteTask"),
+  boardPreview: byId("boardPreview"),
+  boardLanes: Array.from(document.querySelectorAll(".board-lane")),
   calendarGrid: byId("calendarGrid"),
   monthLabel: byId("monthLabel"),
   selectedDatePanel: byId("selectedDatePanel"),
@@ -171,6 +174,7 @@ render();
 
 function bindEvents() {
   byId("openTaskModal").addEventListener("click", () => openTaskModal());
+  byId("openTaskModalInline").addEventListener("click", () => openTaskModal());
   byId("closeTaskModal").addEventListener("click", closeTaskModal);
   byId("addSubtask").addEventListener("click", () => addSubtaskField());
   byId("clearCompleted").addEventListener("click", clearCompleted);
@@ -184,15 +188,7 @@ function bindEvents() {
     render();
   });
 
-  refs.priorityFilter.addEventListener("change", (event) => {
-    filters.priority = event.target.value;
-    render();
-  });
-
-  refs.sortSelect.addEventListener("change", (event) => {
-    filters.sort = event.target.value;
-    render();
-  });
+  bindCustomMenus();
 
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.addEventListener("click", () => {
@@ -217,6 +213,13 @@ function bindEvents() {
     if (event.target === refs.taskModal) closeTaskModal();
   });
 
+  refs.boardLanes.forEach((lane) => {
+    lane.addEventListener("mouseenter", () => renderBoardPreview(lane.dataset.boardStatus));
+    lane.addEventListener("focus", () => renderBoardPreview(lane.dataset.boardStatus));
+  });
+
+  document.querySelector(".mini-board").addEventListener("mouseleave", () => renderBoardPreview());
+
   refs.calendarGrid.addEventListener("click", (event) => {
     const button = event.target.closest("[data-date]");
     if (!button) return;
@@ -226,10 +229,12 @@ function bindEvents() {
 
 function render() {
   persist();
+  syncCustomMenus();
   renderStats();
   renderTags();
   renderTasks();
   renderCalendar();
+  renderBoardPreview();
 }
 
 function renderStats() {
@@ -250,6 +255,42 @@ function renderStats() {
   byId("todoLane").textContent = tasks.filter((task) => task.status === "todo").length;
   byId("doingLane").textContent = tasks.filter((task) => task.status === "doing").length;
   byId("doneLane").textContent = completed.length;
+  renderStatPopover("todayPopover", "今日待办", todayTasks);
+  renderStatPopover("highPopover", "高优先级", high);
+  renderStatPopover("completedPopover", "已完成任务", completed);
+  renderStatPopover("overduePopover", "逾期任务", overdue);
+}
+
+function renderStatPopover(id, title, tasks) {
+  const rows = getSmartSorted(tasks).slice(0, 4);
+  byId(id).innerHTML = `
+    <strong>${title}</strong>
+    ${
+      rows.length
+        ? `<ul>${rows.map((task) => `<li><i class="preview-dot ${task.priority}"></i><span>${escapeHTML(task.title)}</span></li>`).join("")}</ul>`
+        : `<p>暂无对应任务。</p>`
+    }
+  `;
+}
+
+function renderBoardPreview(status = "todo") {
+  const statusTasks = getSmartSorted(state.tasks.filter((task) => task.status === status));
+  const title = statusText[status] || "未开始";
+  refs.boardLanes.forEach((lane) => {
+    lane.classList.toggle("is-active", lane.dataset.boardStatus === status);
+  });
+
+  refs.boardPreview.innerHTML = `
+    <div class="board-preview-head">
+      <strong>${title}</strong>
+      <span>${statusTasks.length} 个任务</span>
+    </div>
+    ${
+      statusTasks.length
+        ? `<ul>${statusTasks.slice(0, 4).map((task) => `<li><i class="preview-dot ${task.priority}"></i>${escapeHTML(task.title)}</li>`).join("")}</ul>`
+        : `<p>当前没有${title}任务。</p>`
+    }
+  `;
 }
 
 function renderTags() {
@@ -364,8 +405,14 @@ function renderCalendar() {
   const firstDay = new Date(year, month, 1);
   const startOffset = (firstDay.getDay() + 6) % 7;
   const gridStart = addDays(firstDay, -startOffset);
-  const taskCountByDate = state.tasks.reduce((map, task) => {
-    map[task.dueDate] = (map[task.dueDate] || 0) + 1;
+  const taskInfoByDate = state.tasks.reduce((map, task) => {
+    if (!map[task.dueDate]) {
+      map[task.dueDate] = { count: 0, priority: task.priority };
+    }
+    map[task.dueDate].count += 1;
+    if (priorityWeight[task.priority] > priorityWeight[map[task.dueDate].priority]) {
+      map[task.dueDate].priority = task.priority;
+    }
     return map;
   }, {});
 
@@ -375,13 +422,16 @@ function renderCalendar() {
     const iso = toISODate(date);
     const isCurrentMonth = date.getMonth() === month;
     const dayInfo = getCalendarDayInfo(iso);
-    const taskCount = taskCountByDate[iso] || 0;
+    const taskInfo = taskInfoByDate[iso];
+    const taskCount = taskInfo?.count || 0;
+    const taskPriority = taskInfo?.priority || "";
     const classes = [
       "calendar-day",
       isCurrentMonth ? "" : "is-muted",
       iso === isoToday ? "is-today" : "",
       iso === selectedCalendarDate ? "is-selected" : "",
       taskCount ? "has-task" : "",
+      taskPriority ? `task-priority-${taskPriority}` : "",
       dayInfo.type === "holiday" ? "has-holiday" : "",
       dayInfo.isRest ? "is-rest-day" : "",
       dayInfo.isWorkday ? "is-work-day" : ""
@@ -390,9 +440,7 @@ function renderCalendar() {
     return `
       <button class="${classes}" type="button" data-date="${iso}" aria-label="${formatFullDate(iso)}">
         <span class="calendar-number">${date.getDate()}</span>
-        ${dayInfo.name ? `<small>${dayInfo.name}</small>` : ""}
-        ${dayInfo.isRest ? `<b class="day-badge rest">休</b>` : ""}
-        ${dayInfo.isWorkday ? `<b class="day-badge work">班</b>` : ""}
+        ${dayInfo.label ? `<small>${dayInfo.label}</small>` : ""}
         ${taskCount ? `<i aria-hidden="true"></i>` : ""}
       </button>`;
   }).join("");
@@ -539,8 +587,67 @@ function reorderTasks(sourceId, targetId) {
   tasks.forEach((task, index) => (task.order = index + 1));
   state.tasks = tasks;
   filters.sort = "manual";
-  refs.sortSelect.value = "manual";
+  syncCustomMenus();
   render();
+}
+
+function bindCustomMenus() {
+  refs.customSelects.forEach((select) => {
+    const toggle = select.querySelector(".custom-select-button");
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const willOpen = !select.classList.contains("is-open");
+      closeCustomMenus();
+      select.classList.toggle("is-open", willOpen);
+      toggle.setAttribute("aria-expanded", String(willOpen));
+    });
+
+    select.querySelectorAll(".custom-select-menu button").forEach((option) => {
+      option.addEventListener("click", () => {
+        if (option.dataset.priorityValue) filters.priority = option.dataset.priorityValue;
+        if (option.dataset.sortValue) filters.sort = option.dataset.sortValue;
+        closeCustomMenus();
+        render();
+      });
+    });
+  });
+
+  document.addEventListener("click", closeCustomMenus);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeCustomMenus();
+  });
+}
+
+function closeCustomMenus() {
+  refs.customSelects.forEach((select) => {
+    select.classList.remove("is-open");
+    select.querySelector(".custom-select-button").setAttribute("aria-expanded", "false");
+  });
+}
+
+function syncCustomMenus() {
+  const priorityLabels = {
+    all: "全部优先级",
+    high: "高优先级",
+    medium: "中优先级",
+    low: "低优先级"
+  };
+  const sortLabels = {
+    smart: "智能排序",
+    priority: "按优先级",
+    due: "按截止时间",
+    created: "按创建时间",
+    manual: "手动排序"
+  };
+
+  refs.priorityMenuLabel.textContent = priorityLabels[filters.priority];
+  refs.sortMenuLabel.textContent = sortLabels[filters.sort];
+  document.querySelectorAll("[data-priority-value]").forEach((button) => {
+    button.classList.toggle("is-selected", button.dataset.priorityValue === filters.priority);
+  });
+  document.querySelectorAll("[data-sort-value]").forEach((button) => {
+    button.classList.toggle("is-selected", button.dataset.sortValue === filters.sort);
+  });
 }
 
 function toggleTheme() {
@@ -596,6 +703,7 @@ function getCalendarDayInfo(isoDate) {
   if (override?.type === "work") {
     return {
       name: override.name,
+      label: override.name,
       type: "work",
       isRest: false,
       isWorkday: true,
@@ -606,6 +714,7 @@ function getCalendarDayInfo(isoDate) {
   if (override) {
     return {
       name: override.name,
+      label: override.name,
       type: override.type,
       isRest: true,
       isWorkday: false,
@@ -616,6 +725,7 @@ function getCalendarDayInfo(isoDate) {
   if (isWeekend) {
     return {
       name: "周末",
+      label: "",
       type: "weekend",
       isRest: true,
       isWorkday: false,
@@ -625,6 +735,7 @@ function getCalendarDayInfo(isoDate) {
 
   return {
     name: "",
+    label: "",
     type: "weekday",
     isRest: false,
     isWorkday: true,

@@ -55,7 +55,7 @@
               <input id="searchInput" type="search" placeholder="搜索任务、描述或标签" />
             </label>
             <button id="themeToggle" class="icon-button" type="button" aria-label="切换主题">◑</button>
-            <button id="openTaskModal" class="primary-button" type="button">＋ 新建任务</button>
+            <button id="openTaskModal" class="icon-button add-task-top" type="button" aria-label="新建任务">＋</button>
           </div>
         </header>
 
@@ -64,21 +64,25 @@
             <span>今日待办</span>
             <strong id="todayCount">0</strong>
             <small id="todayHint">保持节奏</small>
+            <div class="stat-popover" id="todayPopover"></div>
           </article>
           <article class="stat-card ink">
             <span>高优先级</span>
             <strong id="highCount">0</strong>
             <small>需要优先处理</small>
+            <div class="stat-popover" id="highPopover"></div>
           </article>
           <article class="stat-card mint">
             <span>完成率</span>
             <strong id="completionRate">0%</strong>
             <small id="completedCount">0 个已完成</small>
+            <div class="stat-popover" id="completedPopover"></div>
           </article>
           <article class="stat-card paper">
             <span>逾期任务</span>
             <strong id="overdueCount">0</strong>
             <small>尽快重新安排</small>
+            <div class="stat-popover" id="overduePopover"></div>
           </article>
         </section>
 
@@ -90,19 +94,31 @@
             <button class="segment" data-status="done" type="button">已完成</button>
           </div>
           <div class="filter-row">
-            <select id="priorityFilter" aria-label="优先级筛选">
-              <option value="all">全部优先级</option>
-              <option value="high">高优先级</option>
-              <option value="medium">中优先级</option>
-              <option value="low">低优先级</option>
-            </select>
-            <select id="sortSelect" aria-label="排序方式">
-              <option value="smart">智能排序</option>
-              <option value="priority">按优先级</option>
-              <option value="due">按截止时间</option>
-              <option value="created">按创建时间</option>
-              <option value="manual">手动排序</option>
-            </select>
+            <div class="custom-select" data-menu="priority">
+              <button id="priorityMenuButton" class="custom-select-button" type="button" aria-expanded="false">
+                <span id="priorityMenuLabel">全部优先级</span>
+                <i>⌄</i>
+              </button>
+              <div class="custom-select-menu" role="menu">
+                <button class="is-selected" data-priority-value="all" type="button">全部优先级</button>
+                <button data-priority-value="high" type="button">高优先级</button>
+                <button data-priority-value="medium" type="button">中优先级</button>
+                <button data-priority-value="low" type="button">低优先级</button>
+              </div>
+            </div>
+            <div class="custom-select" data-menu="sort">
+              <button id="sortMenuButton" class="custom-select-button" type="button" aria-expanded="false">
+                <span id="sortMenuLabel">智能排序</span>
+                <i>⌄</i>
+              </button>
+              <div class="custom-select-menu" role="menu">
+                <button class="is-selected" data-sort-value="smart" type="button">智能排序</button>
+                <button data-sort-value="priority" type="button">按优先级</button>
+                <button data-sort-value="due" type="button">按截止时间</button>
+                <button data-sort-value="created" type="button">按创建时间</button>
+                <button data-sort-value="manual" type="button">手动排序</button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -113,12 +129,34 @@
                 <h2 id="viewTitle">全部任务</h2>
                 <p id="viewSubtitle">拖动任务卡片可以调整手动顺序。</p>
               </div>
-              <button id="clearCompleted" class="ghost-button" type="button">清理已完成</button>
+              <div class="column-actions">
+                <button id="openTaskModalInline" class="primary-button" type="button">＋ 新建任务</button>
+                <button id="clearCompleted" class="ghost-button" type="button">清理已完成</button>
+              </div>
             </div>
             <div id="taskList" class="task-list" aria-live="polite"></div>
           </section>
 
           <aside class="detail-column">
+            <section class="mini-board">
+              <div class="section-title">状态看板</div>
+              <div class="board-lanes">
+                <div class="board-lane" data-board-status="todo">
+                  <span>未开始</span>
+                  <strong id="todoLane">0</strong>
+                </div>
+                <div class="board-lane" data-board-status="doing">
+                  <span>进行中</span>
+                  <strong id="doingLane">0</strong>
+                </div>
+                <div class="board-lane" data-board-status="done">
+                  <span>已完成</span>
+                  <strong id="doneLane">0</strong>
+                </div>
+              </div>
+              <div id="boardPreview" class="board-preview" aria-live="polite"></div>
+            </section>
+
             <section class="calendar-card">
               <div class="calendar-head apple-calendar-head">
                 <div>
@@ -143,28 +181,12 @@
               <div class="calendar-legend" aria-label="日历标识说明">
                 <span><i class="legend-rest"></i>休息日</span>
                 <span><i class="legend-work"></i>调休上班</span>
-                <span><i class="legend-task"></i>有任务</span>
+                <span><i class="legend-task-high"></i>高优先级</span>
+                <span><i class="legend-task-medium"></i>中优先级</span>
+                <span><i class="legend-task-low"></i>低优先级</span>
               </div>
               <div id="calendarGrid" class="calendar-grid"></div>
               <div id="selectedDatePanel" class="selected-date-panel"></div>
-            </section>
-
-            <section class="mini-board">
-              <div class="section-title">状态看板</div>
-              <div class="board-lanes">
-                <div>
-                  <span>未开始</span>
-                  <strong id="todoLane">0</strong>
-                </div>
-                <div>
-                  <span>进行中</span>
-                  <strong id="doingLane">0</strong>
-                </div>
-                <div>
-                  <span>已完成</span>
-                  <strong id="doneLane">0</strong>
-                </div>
-              </div>
             </section>
           </aside>
         </section>
