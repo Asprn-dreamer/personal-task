@@ -1139,7 +1139,10 @@ select:focus {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(25, 27, 30, 0.42);
+  background:
+    linear-gradient(135deg, rgba(255, 98, 98, 0.12), rgba(70, 197, 155, 0.1)),
+    rgba(25, 27, 30, 0.46);
+  backdrop-filter: blur(10px);
 }
 
 .modal-backdrop.is-open {
@@ -1147,12 +1150,21 @@ select:focus {
 }
 
 .task-modal {
-  width: min(620px, 100%);
+  width: min(660px, 100%);
   max-height: calc(100vh - 48px);
   overflow: auto;
-  padding: 20px;
+  padding: 22px;
   display: grid;
-  gap: 14px;
+  gap: 15px;
+  color: var(--text);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 250, 247, 0.98)),
+    var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  box-shadow: 0 30px 72px rgba(31, 37, 43, 0.28);
+  animation: modal-in 180ms ease;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 98, 98, 0.38) transparent;
 }
 
 .modal-head,
@@ -1161,11 +1173,45 @@ select:focus {
   justify-content: space-between;
 }
 
+.modal-head {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.modal-head .eyebrow {
+  color: var(--coral-dark);
+  font-weight: 800;
+}
+
+.modal-head h2 {
+  font-size: 26px;
+}
+
+.modal-head .icon-button {
+  border-color: rgba(255, 98, 98, 0.16);
+  background: rgba(255, 98, 98, 0.08);
+}
+
 .task-modal label {
   display: grid;
-  gap: 7px;
+  gap: 8px;
   color: var(--muted);
   font-size: 13px;
+  font-weight: 700;
+}
+
+.task-modal input:not([type="checkbox"]),
+.task-modal select,
+.task-modal textarea {
+  border-color: rgba(36, 35, 38, 0.1);
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.task-modal textarea {
+  min-height: 92px;
+  resize: vertical;
+  line-height: 1.55;
 }
 
 .form-grid {
@@ -1179,6 +1225,12 @@ select:focus {
   grid-template-columns: unset;
   align-items: center;
   gap: 10px !important;
+  width: fit-content;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.62);
 }
 
 .check-row input {
@@ -1188,9 +1240,25 @@ select:focus {
 }
 
 .subtask-editor {
-  padding: 12px;
+  padding: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.54);
+}
+
+.subtask-top {
+  margin-bottom: 10px;
+}
+
+.subtask-top span {
+  font-weight: 900;
+}
+
+.subtask-top .ghost-button {
+  min-height: 34px;
+  border-color: rgba(255, 98, 98, 0.2);
+  color: var(--coral-dark);
+  background: rgba(255, 98, 98, 0.08);
 }
 
 .subtask-field {
@@ -1198,16 +1266,52 @@ select:focus {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
+  padding: 7px;
+  border-radius: var(--radius);
+  background: rgba(255, 250, 247, 0.82);
+}
+
+.subtask-field + .subtask-field {
+  margin-top: 8px;
+}
+
+.subtask-field input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--coral);
 }
 
 .subtask-field input[type="text"] {
   width: 100%;
   padding: 9px 10px;
+  background: #fff;
 }
 
 .modal-actions {
   display: flex;
   gap: 10px;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.modal-actions .danger-button {
+  margin-right: auto;
+}
+
+.modal-actions .primary-button,
+.modal-actions .danger-button {
+  min-width: 112px;
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .toast {
