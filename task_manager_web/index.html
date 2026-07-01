@@ -138,23 +138,18 @@
           </section>
 
           <aside class="detail-column">
-            <section class="mini-board">
-              <div class="section-title">状态看板</div>
-              <div class="board-lanes">
-                <div class="board-lane" data-board-status="todo">
-                  <span>未开始</span>
-                  <strong id="todoLane">0</strong>
+            <section class="achievement-card">
+              <div class="history-block">
+                <div>
+                  <span class="section-title">今日成就</span>
+                  <strong>最近完成</strong>
                 </div>
-                <div class="board-lane" data-board-status="doing">
-                  <span>进行中</span>
-                  <strong id="doingLane">0</strong>
+                <div class="history-stats">
+                  <span><b id="weekDoneCount">0</b> 本周</span>
+                  <span><b id="monthDoneCount">0</b> 本月</span>
                 </div>
-                <div class="board-lane" data-board-status="done">
-                  <span>已完成</span>
-                  <strong id="doneLane">0</strong>
-                </div>
+                <div id="completionHistory" class="completion-history"></div>
               </div>
-              <div id="boardPreview" class="board-preview" aria-live="polite"></div>
             </section>
 
             <section class="calendar-card">
@@ -178,15 +173,7 @@
                 <span>六</span>
                 <span>日</span>
               </div>
-              <div class="calendar-legend" aria-label="日历标识说明">
-                <span><i class="legend-rest"></i>休息日</span>
-                <span><i class="legend-work"></i>调休上班</span>
-                <span><i class="legend-task-high"></i>高优先级</span>
-                <span><i class="legend-task-medium"></i>中优先级</span>
-                <span><i class="legend-task-low"></i>低优先级</span>
-              </div>
               <div id="calendarGrid" class="calendar-grid"></div>
-              <div id="selectedDatePanel" class="selected-date-panel"></div>
             </section>
           </aside>
         </section>
@@ -215,19 +202,29 @@
         <div class="form-grid">
           <label>
             优先级
-            <select id="taskPriority">
+            <select id="taskPriority" class="native-hidden">
               <option value="high">高</option>
               <option value="medium" selected>中</option>
               <option value="low">低</option>
             </select>
+            <div class="choice-group" data-choice-for="taskPriority">
+              <button data-value="high" type="button">高</button>
+              <button data-value="medium" type="button">中</button>
+              <button data-value="low" type="button">低</button>
+            </div>
           </label>
           <label>
             状态
-            <select id="taskStatus">
+            <select id="taskStatus" class="native-hidden">
               <option value="todo">未开始</option>
               <option value="doing">进行中</option>
               <option value="done">已完成</option>
             </select>
+            <div class="choice-group" data-choice-for="taskStatus">
+              <button data-value="todo" type="button">未开始</button>
+              <button data-value="doing" type="button">进行中</button>
+              <button data-value="done" type="button">已完成</button>
+            </div>
           </label>
         </div>
         <div class="form-grid">
@@ -240,6 +237,21 @@
             <input id="taskTags" placeholder="工作, 学习" />
           </label>
         </div>
+        <label>
+          重复
+          <select id="taskRepeat" class="native-hidden">
+            <option value="none" selected>不重复</option>
+            <option value="daily">每天</option>
+            <option value="weekly">每周</option>
+            <option value="monthly">每月</option>
+          </select>
+          <div class="choice-group repeat-choice" data-choice-for="taskRepeat">
+            <button data-value="none" type="button">不重复</button>
+            <button data-value="daily" type="button">每天</button>
+            <button data-value="weekly" type="button">每周</button>
+            <button data-value="monthly" type="button">每月</button>
+          </div>
+        </label>
         <label class="check-row">
           <input id="taskPinned" type="checkbox" />
           <span>置顶重要任务</span>

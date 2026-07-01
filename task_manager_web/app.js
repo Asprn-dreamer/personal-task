@@ -12,6 +12,13 @@ const statusText = {
   done: "已完成"
 };
 
+const repeatText = {
+  none: "不重复",
+  daily: "每天",
+  weekly: "每周",
+  monthly: "每月"
+};
+
 const priorityWeight = {
   high: 3,
   medium: 2,
@@ -70,6 +77,7 @@ const sampleTasks = [
     priority: "high",
     status: "doing",
     dueDate: isoToday,
+    repeat: "none",
     tags: ["项目", "产品"],
     pinned: true,
     createdAt: Date.now() - 86400000 * 3,
@@ -86,6 +94,7 @@ const sampleTasks = [
     priority: "medium",
     status: "todo",
     dueDate: toISODate(tomorrow),
+    repeat: "weekly",
     tags: ["学习"],
     pinned: false,
     createdAt: Date.now() - 86400000 * 2,
@@ -102,6 +111,7 @@ const sampleTasks = [
     priority: "low",
     status: "todo",
     dueDate: toISODate(nextWeek),
+    repeat: "monthly",
     tags: ["生活", "健康"],
     pinned: false,
     createdAt: Date.now() - 86400000,
@@ -115,6 +125,7 @@ const sampleTasks = [
     priority: "medium",
     status: "done",
     dueDate: toISODate(addDays(today, -1)),
+    repeat: "none",
     tags: ["工作"],
     pinned: false,
     createdAt: Date.now() - 86400000 * 5,
@@ -156,16 +167,18 @@ const refs = {
   taskDescription: byId("taskDescription"),
   taskPriority: byId("taskPriority"),
   taskStatus: byId("taskStatus"),
+  choiceGroups: Array.from(document.querySelectorAll(".choice-group")),
   taskDueDate: byId("taskDueDate"),
+  taskRepeat: byId("taskRepeat"),
   taskTags: byId("taskTags"),
   taskPinned: byId("taskPinned"),
   subtaskFields: byId("subtaskFields"),
   deleteTask: byId("deleteTask"),
-  boardPreview: byId("boardPreview"),
-  boardLanes: Array.from(document.querySelectorAll(".board-lane")),
   calendarGrid: byId("calendarGrid"),
   monthLabel: byId("monthLabel"),
-  selectedDatePanel: byId("selectedDatePanel"),
+  completionHistory: byId("completionHistory"),
+  weekDoneCount: byId("weekDoneCount"),
+  monthDoneCount: byId("monthDoneCount"),
   toast: byId("toast")
 };
 
@@ -182,6 +195,7 @@ function bindEvents() {
   byId("prevMonth").addEventListener("click", () => moveCalendarMonth(-1));
   byId("nextMonth").addEventListener("click", () => moveCalendarMonth(1));
   byId("todayButton").addEventListener("click", jumpCalendarToToday);
+  bindChoiceGroups();
 
   refs.searchInput.addEventListener("input", (event) => {
     filters.search = event.target.value.trim().toLowerCase();
@@ -213,13 +227,6 @@ function bindEvents() {
     if (event.target === refs.taskModal) closeTaskModal();
   });
 
-  refs.boardLanes.forEach((lane) => {
-    lane.addEventListener("mouseenter", () => renderBoardPreview(lane.dataset.boardStatus));
-    lane.addEventListener("focus", () => renderBoardPreview(lane.dataset.boardStatus));
-  });
-
-  document.querySelector(".mini-board").addEventListener("mouseleave", () => renderBoardPreview());
-
   refs.calendarGrid.addEventListener("click", (event) => {
     const button = event.target.closest("[data-date]");
     if (!button) return;
@@ -234,30 +241,29 @@ function render() {
   renderTags();
   renderTasks();
   renderCalendar();
-  renderBoardPreview();
+  renderCompletionHistory();
 }
 
 function renderStats() {
   const tasks = state.tasks;
   const active = tasks.filter((task) => task.status !== "done");
   const completed = tasks.filter((task) => task.status === "done");
-  const todayTasks = active.filter((task) => task.dueDate === isoToday);
+  const allTodayTasks = tasks.filter((task) => task.dueDate === isoToday);
+  const todayTasks = allTodayTasks.filter((task) => task.status !== "done");
+  const todayCompleted = allTodayTasks.filter((task) => task.status === "done");
   const overdue = active.filter((task) => task.dueDate < isoToday);
   const high = active.filter((task) => task.priority === "high");
-  const rate = tasks.length ? Math.round((completed.length / tasks.length) * 100) : 0;
+  const rate = allTodayTasks.length ? Math.round((todayCompleted.length / allTodayTasks.length) * 100) : 0;
 
   byId("todayCount").textContent = todayTasks.length;
   byId("todayHint").textContent = todayTasks.length ? "今天别摊太满" : "今天很清爽";
   byId("highCount").textContent = high.length;
   byId("completionRate").textContent = `${rate}%`;
-  byId("completedCount").textContent = `${completed.length} 个已完成`;
+  byId("completedCount").textContent = `${todayCompleted.length}/${allTodayTasks.length} 今日完成`;
   byId("overdueCount").textContent = overdue.length;
-  byId("todoLane").textContent = tasks.filter((task) => task.status === "todo").length;
-  byId("doingLane").textContent = tasks.filter((task) => task.status === "doing").length;
-  byId("doneLane").textContent = completed.length;
   renderStatPopover("todayPopover", "今日待办", todayTasks);
   renderStatPopover("highPopover", "高优先级", high);
-  renderStatPopover("completedPopover", "已完成任务", completed);
+  renderStatPopover("completedPopover", "今日已完成", todayCompleted);
   renderStatPopover("overduePopover", "逾期任务", overdue);
 }
 
@@ -273,24 +279,30 @@ function renderStatPopover(id, title, tasks) {
   `;
 }
 
-function renderBoardPreview(status = "todo") {
-  const statusTasks = getSmartSorted(state.tasks.filter((task) => task.status === status));
-  const title = statusText[status] || "未开始";
-  refs.boardLanes.forEach((lane) => {
-    lane.classList.toggle("is-active", lane.dataset.boardStatus === status);
-  });
+function renderCompletionHistory() {
+  const history = state.completionHistory || [];
+  const weekStart = getWeekStart(new Date());
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const weekCount = history.filter((item) => new Date(item.completedAt) >= weekStart).length;
+  const monthCount = history.filter((item) => new Date(item.completedAt) >= monthStart).length;
 
-  refs.boardPreview.innerHTML = `
-    <div class="board-preview-head">
-      <strong>${title}</strong>
-      <span>${statusTasks.length} 个任务</span>
-    </div>
-    ${
-      statusTasks.length
-        ? `<ul>${statusTasks.slice(0, 4).map((task) => `<li><i class="preview-dot ${task.priority}"></i>${escapeHTML(task.title)}</li>`).join("")}</ul>`
-        : `<p>当前没有${title}任务。</p>`
-    }
-  `;
+  refs.weekDoneCount.textContent = weekCount;
+  refs.monthDoneCount.textContent = monthCount;
+  refs.completionHistory.innerHTML = history.length
+    ? `<ul>${history
+        .slice(0, 3)
+        .map(
+          (item) => `
+            <li>
+              <i class="preview-dot ${item.priority}"></i>
+              <div>
+                <strong>${escapeHTML(item.title)}</strong>
+                <span>${formatDate(toISODate(new Date(item.completedAt)))} · ${repeatText[item.repeat || "none"]}</span>
+              </div>
+            </li>`
+        )
+        .join("")}</ul>`
+    : `<p>完成任务后会在这里留下记录。</p>`;
 }
 
 function renderTags() {
@@ -354,13 +366,17 @@ function renderTaskCard(task) {
       <div>
         <div class="task-title-row">
           <h3>${escapeHTML(task.title)}</h3>
-          ${task.pinned ? `<span class="pin-badge">置顶</span>` : ""}
+          <button class="pin-toggle ${task.pinned ? "is-pinned" : ""}" type="button" aria-label="${task.pinned ? "取消重点" : "设为重点"}">
+            ${task.pinned ? "★" : "☆"}
+            <span>重点</span>
+          </button>
           <span class="priority-badge ${task.priority}">${priorityText[task.priority]}</span>
         </div>
         <p class="task-desc">${escapeHTML(task.description || "暂无描述")}</p>
         <div class="task-meta">
           <span class="status-badge">${statusText[task.status]}</span>
           <span class="due-badge">${dueText}</span>
+          ${(task.repeat && task.repeat !== "none") ? `<span class="repeat-badge">${repeatText[task.repeat]}</span>` : ""}
           ${subtaskSummary}
         </div>
         <div class="task-expand">
@@ -370,7 +386,6 @@ function renderTaskCard(task) {
       </div>
       <div class="task-actions">
         <button class="mini-action edit-task" type="button" aria-label="编辑">✎</button>
-        <button class="mini-action pin-task" type="button" aria-label="置顶">${task.pinned ? "⌃" : "⌄"}</button>
       </div>
     </article>
   `;
@@ -380,18 +395,21 @@ function bindTaskCard(card) {
   const taskId = card.dataset.id;
   card.querySelector(".task-check").addEventListener("change", (event) => {
     const task = findTask(taskId);
-    task.status = event.target.checked ? "done" : "todo";
-    if (task.status === "done") {
-      task.subtasks.forEach((item) => (item.done = true));
+    if (event.target.checked) {
+      completeTask(task);
+    } else {
+      task.status = "todo";
     }
     toast(task.status === "done" ? "任务已完成" : "任务已恢复");
     render();
   });
 
   card.querySelector(".edit-task").addEventListener("click", () => openTaskModal(findTask(taskId)));
-  card.querySelector(".pin-task").addEventListener("click", () => {
+  card.querySelector(".pin-toggle").addEventListener("click", (event) => {
+    event.stopPropagation();
     const task = findTask(taskId);
     task.pinned = !task.pinned;
+    toast(task.pinned ? "已标为重点任务" : "已取消重点标记");
     render();
   });
   card.querySelectorAll("[data-subtask-id]").forEach((button) => {
@@ -402,7 +420,7 @@ function bindTaskCard(card) {
       if (!subtask) return;
       subtask.done = !subtask.done;
       if (task.subtasks.length && task.subtasks.every((item) => item.done)) {
-        task.status = "done";
+        completeTask(task);
       } else if (task.status === "done") {
         task.status = "doing";
       }
@@ -454,6 +472,7 @@ function renderCalendar() {
     const taskInfo = taskInfoByDate[iso];
     const taskCount = taskInfo?.count || 0;
     const taskPriority = taskInfo?.priority || "";
+    const dayTasks = state.tasks.filter((task) => task.dueDate === iso);
     const classes = [
       "calendar-day",
       isCurrentMonth ? "" : "is-muted",
@@ -471,9 +490,17 @@ function renderCalendar() {
         <span class="calendar-number">${date.getDate()}</span>
         ${dayInfo.label ? `<small>${dayInfo.label}</small>` : ""}
         ${taskCount ? `<i aria-hidden="true"></i>` : ""}
+        <span class="calendar-popover">
+          <strong>${formatFullDate(iso)}</strong>
+          <em>${dayInfo.description} · ${taskCount} 个任务</em>
+          ${
+            dayTasks.length
+              ? `<ul>${dayTasks.slice(0, 4).map((task) => `<li><b class="preview-dot ${task.priority}"></b>${escapeHTML(task.title)}</li>`).join("")}</ul>`
+              : `<p>这一天还没有安排任务。</p>`
+          }
+        </span>
       </button>`;
   }).join("");
-  renderSelectedDatePanel();
 }
 
 function getVisibleTasks() {
@@ -507,6 +534,74 @@ function getSmartSorted(tasks) {
   });
 }
 
+function completeTask(task) {
+  const wasDone = task.status === "done";
+  task.status = "done";
+  task.completedAt = Date.now();
+  task.subtasks.forEach((item) => (item.done = true));
+
+  if (!wasDone) {
+    recordCompletion(task);
+    createNextRepeatTask(task);
+  }
+}
+
+function recordCompletion(task) {
+  state.completionHistory.unshift({
+    id: crypto.randomUUID(),
+    taskId: task.id,
+    title: task.title,
+    completedAt: Date.now(),
+    dueDate: task.dueDate,
+    priority: task.priority,
+    tags: [...task.tags],
+    repeat: task.repeat || "none"
+  });
+  state.completionHistory = state.completionHistory.slice(0, 80);
+}
+
+function createNextRepeatTask(task) {
+  if (!task.repeat || task.repeat === "none") return;
+  const nextDueDate = getNextRepeatDate(task.dueDate, task.repeat);
+  const repeatParentId = task.repeatParentId || task.id;
+  const alreadyExists = state.tasks.some(
+    (item) => item.repeatParentId === repeatParentId && item.dueDate === nextDueDate && item.status !== "done"
+  );
+  if (alreadyExists) return;
+
+  state.tasks.push({
+    id: crypto.randomUUID(),
+    title: task.title,
+    description: task.description,
+    priority: task.priority,
+    status: "todo",
+    dueDate: nextDueDate,
+    repeat: task.repeat,
+    repeatParentId,
+    tags: [...task.tags],
+    pinned: task.pinned,
+    createdAt: Date.now(),
+    order: getNextOrder(),
+    subtasks: task.subtasks.map((item) => ({
+      id: crypto.randomUUID(),
+      title: item.title,
+      done: false
+    }))
+  });
+}
+
+function getNextRepeatDate(dateValue, repeat) {
+  const date = parseISODate(dateValue);
+  if (repeat === "daily") return toISODate(addDays(date, 1));
+  if (repeat === "weekly") return toISODate(addDays(date, 7));
+  if (repeat === "monthly") {
+    const next = new Date(date);
+    next.setMonth(next.getMonth() + 1);
+    return toISODate(next);
+  }
+  return dateValue;
+}
+
 function openTaskModal(task = null) {
   refs.taskForm.reset();
   refs.subtaskFields.innerHTML = "";
@@ -520,23 +615,47 @@ function openTaskModal(task = null) {
     refs.taskPriority.value = task.priority;
     refs.taskStatus.value = task.status;
     refs.taskDueDate.value = task.dueDate;
+    refs.taskRepeat.value = task.repeat || "none";
     refs.taskTags.value = task.tags.join(", ");
     refs.taskPinned.checked = task.pinned;
     task.subtasks.forEach((item) => addSubtaskField(item));
   } else {
     refs.taskId.value = "";
     refs.taskDueDate.value = isoToday;
+    refs.taskRepeat.value = "none";
     addSubtaskField();
   }
 
   refs.taskModal.classList.add("is-open");
   refs.taskModal.setAttribute("aria-hidden", "false");
+  syncChoiceGroups();
   refs.taskTitle.focus();
 }
 
 function closeTaskModal() {
   refs.taskModal.classList.remove("is-open");
   refs.taskModal.setAttribute("aria-hidden", "true");
+}
+
+function bindChoiceGroups() {
+  refs.choiceGroups.forEach((group) => {
+    const target = byId(group.dataset.choiceFor);
+    group.querySelectorAll("button").forEach((button) => {
+      button.addEventListener("click", () => {
+        target.value = button.dataset.value;
+        syncChoiceGroups();
+      });
+    });
+  });
+}
+
+function syncChoiceGroups() {
+  refs.choiceGroups.forEach((group) => {
+    const target = byId(group.dataset.choiceFor);
+    group.querySelectorAll("button").forEach((button) => {
+      button.classList.toggle("is-selected", button.dataset.value === target.value);
+    });
+  });
 }
 
 function addSubtaskField(item = { title: "", done: false }) {
@@ -554,6 +673,7 @@ function addSubtaskField(item = { title: "", done: false }) {
 function saveTaskFromForm(event) {
   event.preventDefault();
   const id = refs.taskId.value;
+  const existingTask = id ? findTask(id) : null;
   const tags = refs.taskTags.value.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean);
   const subtasks = Array.from(refs.subtaskFields.querySelectorAll(".subtask-field"))
     .map((row) => ({
@@ -569,21 +689,31 @@ function saveTaskFromForm(event) {
     priority: refs.taskPriority.value,
     status: refs.taskStatus.value,
     dueDate: refs.taskDueDate.value,
+    repeat: refs.taskRepeat.value,
     tags: tags.length ? tags : ["未分类"],
     pinned: refs.taskPinned.checked,
     subtasks
   };
 
   if (id) {
-    Object.assign(findTask(id), payload);
+    const wasDoneBefore = existingTask.status === "done";
+    if (payload.status === "done" && !wasDoneBefore) {
+      Object.assign(existingTask, { ...payload, status: "todo" });
+      completeTask(existingTask);
+    } else {
+      Object.assign(existingTask, payload);
+    }
     toast("任务已更新");
   } else {
-    state.tasks.unshift({
+    const newTask = {
       id: crypto.randomUUID(),
       createdAt: Date.now(),
       order: getNextOrder(),
-      ...payload
-    });
+      ...payload,
+      status: payload.status === "done" ? "todo" : payload.status
+    };
+    state.tasks.unshift(newTask);
+    if (payload.status === "done") completeTask(newTask);
     toast("任务已创建");
   }
 
@@ -708,22 +838,6 @@ function selectCalendarDate(isoDate) {
   document.querySelector(".task-column")?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function renderSelectedDatePanel() {
-  const tasks = state.tasks.filter((task) => task.dueDate === selectedCalendarDate);
-  const dayInfo = getCalendarDayInfo(selectedCalendarDate);
-  refs.selectedDatePanel.innerHTML = `
-    <div>
-      <strong>${formatFullDate(selectedCalendarDate)}</strong>
-      <span>${dayInfo.description} · ${tasks.length} 个任务</span>
-    </div>
-    ${
-      tasks.length
-        ? `<ul>${tasks.slice(0, 3).map((task) => `<li>${escapeHTML(task.title)}</li>`).join("")}</ul>`
-        : `<p>这一天还没有安排任务。</p>`
-    }
-  `;
-}
-
 function getCalendarDayInfo(isoDate) {
   const date = parseISODate(isoDate);
   const override = holidayMap[isoDate];
@@ -784,11 +898,20 @@ function loadState() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
     if (stored && Array.isArray(stored.tasks)) {
+      stored.tasks = stored.tasks.map((task) => ({
+        repeat: "none",
+        subtasks: [],
+        tags: ["未分类"],
+        ...task,
+        subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
+        tags: Array.isArray(task.tags) ? task.tags : ["未分类"]
+      }));
+      if (!Array.isArray(stored.completionHistory)) stored.completionHistory = [];
       document.body.classList.toggle("dark", stored.theme === "dark");
       return stored;
     }
   } catch (_) {}
-  return { tasks: sampleTasks, theme: "light" };
+  return { tasks: sampleTasks, completionHistory: [], theme: "light" };
 }
 
 function persist() {
@@ -808,6 +931,14 @@ function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+function getWeekStart(date) {
+  const start = new Date(date);
+  const day = (start.getDay() + 6) % 7;
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - day);
+  return start;
 }
 
 function formatDate(value) {
