@@ -334,6 +334,19 @@ function renderTaskCard(task) {
   const overdue = task.status !== "done" && task.dueDate < isoToday;
   const subtasksDone = task.subtasks.filter((item) => item.done).length;
   const dueText = overdue ? `逾期 ${formatDate(task.dueDate)}` : formatDate(task.dueDate);
+  const subtaskSummary = task.subtasks.length ? `<span class="due-badge">子任务 ${subtasksDone}/${task.subtasks.length}</span>` : "";
+  const tagRows = task.tags.map((tag) => `<span class="tag"># ${escapeHTML(tag)}</span>`).join("");
+  const subtaskRows = task.subtasks.length
+    ? task.subtasks
+        .map(
+          (item) => `
+            <button class="subtask-chip ${item.done ? "is-done" : ""}" type="button" data-subtask-id="${item.id}">
+              <span>${item.done ? "✓" : "○"}</span>
+              ${escapeHTML(item.title)}
+            </button>`
+        )
+        .join("")
+    : `<span class="subtask-empty">暂无子任务</span>`;
 
   return `
     <article class="task-card priority-${task.priority} ${task.status === "done" ? "is-done" : ""}" draggable="true" data-id="${task.id}">
@@ -348,12 +361,12 @@ function renderTaskCard(task) {
         <div class="task-meta">
           <span class="status-badge">${statusText[task.status]}</span>
           <span class="due-badge">${dueText}</span>
-          ${task.subtasks.length ? `<span class="due-badge">子任务 ${subtasksDone}/${task.subtasks.length}</span>` : ""}
+          ${subtaskSummary}
         </div>
-        <div class="task-tags">
-          ${task.tags.map((tag) => `<span class="tag"># ${escapeHTML(tag)}</span>`).join("")}
+        <div class="task-expand">
+          <div class="task-tags">${tagRows}</div>
+          <div class="subtask-list">${subtaskRows}</div>
         </div>
-        ${task.subtasks.length ? `<div class="subtask-list">${task.subtasks.map((item) => `<span class="subtask-chip">${item.done ? "✓" : "○"} ${escapeHTML(item.title)}</span>`).join("")}</div>` : ""}
       </div>
       <div class="task-actions">
         <button class="mini-action edit-task" type="button" aria-label="编辑">✎</button>
@@ -380,6 +393,22 @@ function bindTaskCard(card) {
     const task = findTask(taskId);
     task.pinned = !task.pinned;
     render();
+  });
+  card.querySelectorAll("[data-subtask-id]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const task = findTask(taskId);
+      const subtask = task.subtasks.find((item) => item.id === button.dataset.subtaskId);
+      if (!subtask) return;
+      subtask.done = !subtask.done;
+      if (task.subtasks.length && task.subtasks.every((item) => item.done)) {
+        task.status = "done";
+      } else if (task.status === "done") {
+        task.status = "doing";
+      }
+      toast(subtask.done ? "子任务已完成" : "子任务已恢复");
+      render();
+    });
   });
 
   card.addEventListener("dragstart", () => {

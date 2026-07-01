@@ -665,7 +665,28 @@ select:focus {
   line-height: 1.5;
 }
 
-.task-meta,
+.task-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-expand {
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: max-height 220ms ease, opacity 180ms ease, transform 180ms ease, margin-top 180ms ease;
+}
+
+.task-card:hover .task-expand,
+.task-card:focus-within .task-expand {
+  max-height: 180px;
+  margin-top: 10px;
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .task-tags,
 .subtask-list {
   display: flex;
@@ -678,8 +699,31 @@ select:focus {
 }
 
 .subtask-chip {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   color: var(--muted);
+  background: var(--surface);
+}
+
+.subtask-chip:hover {
+  color: var(--text);
+  border-color: rgba(255, 98, 98, 0.38);
+  background: rgba(255, 98, 98, 0.08);
+}
+
+.subtask-chip.is-done {
+  color: #6b8f7d;
+  text-decoration: line-through;
+}
+
+.subtask-empty {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .task-actions {
