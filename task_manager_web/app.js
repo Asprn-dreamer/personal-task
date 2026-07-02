@@ -149,6 +149,9 @@ let filters = {
 let calendarCursor = new Date(today.getFullYear(), today.getMonth(), 1);
 let selectedCalendarDate = isoToday;
 let draggingId = null;
+let activeCanvasTaskId = null;
+let canvasPointer = null;
+let canvasFullscreen = false;
 
 const refs = {
   taskList: byId("taskList"),
@@ -179,6 +182,17 @@ const refs = {
   completionHistory: byId("completionHistory"),
   weekDoneCount: byId("weekDoneCount"),
   monthDoneCount: byId("monthDoneCount"),
+  canvasModal: byId("canvasModal"),
+  canvasTitle: byId("canvasTitle"),
+  canvasMeta: byId("canvasMeta"),
+  canvasSaveState: byId("canvasSaveState"),
+  infiniteCanvas: byId("infiniteCanvas"),
+  canvasWorld: byId("canvasWorld"),
+  canvasZoomLabel: byId("canvasZoomLabel"),
+  canvasImageInput: byId("canvasImageInput"),
+  canvasVideoInput: byId("canvasVideoInput"),
+  canvasMuteAll: byId("canvasMuteAll"),
+  toggleCanvasFullscreen: byId("toggleCanvasFullscreen"),
   toast: byId("toast")
 };
 
@@ -226,6 +240,30 @@ function bindEvents() {
   refs.taskModal.addEventListener("click", (event) => {
     if (event.target === refs.taskModal) closeTaskModal();
   });
+  byId("closeCanvasModal").addEventListener("click", closeCanvasModal);
+  byId("canvasEditTask").addEventListener("click", editActiveCanvasTask);
+  refs.toggleCanvasFullscreen.addEventListener("click", toggleCanvasFullscreen);
+  byId("addTextBlock").addEventListener("click", () => addCanvasItem("text"));
+  byId("addImageBlock").addEventListener("click", () => refs.canvasImageInput.click());
+  byId("addVideoBlock").addEventListener("click", () => refs.canvasVideoInput.click());
+  byId("addVideoUrlBlock").addEventListener("click", () => addCanvasItem("video"));
+  refs.canvasMuteAll.addEventListener("click", toggleCanvasMute);
+  byId("resetCanvasView").addEventListener("click", resetCanvasView);
+  byId("zoomOutCanvas").addEventListener("click", () => zoomCanvas(-0.1));
+  byId("zoomInCanvas").addEventListener("click", () => zoomCanvas(0.1));
+  refs.canvasImageInput.addEventListener("change", handleImageInputChange);
+  refs.canvasVideoInput.addEventListener("change", handleVideoInputChange);
+  refs.canvasModal.addEventListener("click", (event) => {
+    if (event.target === refs.canvasModal) closeCanvasModal();
+  });
+  refs.infiniteCanvas.addEventListener("pointerdown", handleCanvasPointerDown);
+  window.addEventListener("pointermove", handleCanvasPointerMove);
+  window.addEventListener("pointerup", stopCanvasPointer);
+  window.addEventListener("pointercancel", stopCanvasPointer);
+  refs.infiniteCanvas.addEventListener("wheel", handleCanvasWheel, { passive: false });
+  refs.infiniteCanvas.addEventListener("dragover", handleCanvasDragOver);
+  refs.infiniteCanvas.addEventListener("dragleave", handleCanvasDragLeave);
+  refs.infiniteCanvas.addEventListener("drop", handleCanvasDrop);
 
   refs.calendarGrid.addEventListener("click", (event) => {
     const button = event.target.closest("[data-date]");
@@ -347,6 +385,7 @@ function renderTaskCard(task) {
   const subtasksDone = task.subtasks.filter((item) => item.done).length;
   const dueText = overdue ? `逾期 ${formatDate(task.dueDate)}` : formatDate(task.dueDate);
   const subtaskSummary = task.subtasks.length ? `<span class="due-badge">子任务 ${subtasksDone}/${task.subtasks.length}</span>` : "";
+  const canvasSummary = task.canvas?.items?.length ? `<span class="canvas-badge">画布 ${task.canvas.items.length}</span>` : "";
   const tagRows = task.tags.map((tag) => `<span class="tag"># ${escapeHTML(tag)}</span>`).join("");
   const subtaskRows = task.subtasks.length
     ? task.subtasks
@@ -378,6 +417,7 @@ function renderTaskCard(task) {
           <span class="due-badge">${dueText}</span>
           ${(task.repeat && task.repeat !== "none") ? `<span class="repeat-badge">${repeatText[task.repeat]}</span>` : ""}
           ${subtaskSummary}
+          ${canvasSummary}
         </div>
         <div class="task-expand">
           <div class="task-tags">${tagRows}</div>
@@ -393,6 +433,11 @@ function renderTaskCard(task) {
 
 function bindTaskCard(card) {
   const taskId = card.dataset.id;
+  card.addEventListener("click", (event) => {
+    if (event.target.closest("button, input, .subtask-chip")) return;
+    openCanvasModal(findTask(taskId));
+  });
+
   card.querySelector(".task-check").addEventListener("change", (event) => {
     const task = findTask(taskId);
     if (event.target.checked) {
@@ -580,6 +625,7 @@ function createNextRepeatTask(task) {
     repeatParentId,
     tags: [...task.tags],
     pinned: task.pinned,
+    canvas: createEmptyCanvas(),
     createdAt: Date.now(),
     order: getNextOrder(),
     subtasks: task.subtasks.map((item) => ({
@@ -637,6 +683,468 @@ function closeTaskModal() {
   refs.taskModal.setAttribute("aria-hidden", "true");
 }
 
+function openCanvasModal(task) {
+  if (!task) return;
+  activeCanvasTaskId = task.id;
+  ensureTaskCanvas(task);
+  refs.canvasTitle.textContent = task.title;
+  refs.canvasMeta.textContent = `${formatDate(task.dueDate)} · ${priorityText[task.priority]}优先级 · ${statusText[task.status]}`;
+  refs.canvasModal.classList.add("is-open");
+  refs.canvasModal.setAttribute("aria-hidden", "false");
+  syncCanvasFullscreenState();
+  renderCanvas();
+}
+
+function closeCanvasModal() {
+  canvasFullscreen = false;
+  refs.canvasModal.classList.remove("is-fullscreen");
+  refs.canvasModal.classList.remove("is-open");
+  refs.canvasModal.setAttribute("aria-hidden", "true");
+  activeCanvasTaskId = null;
+  canvasPointer = null;
+  render();
+}
+
+function editActiveCanvasTask() {
+  const task = findTask(activeCanvasTaskId);
+  closeCanvasModal();
+  openTaskModal(task);
+}
+
+function toggleCanvasFullscreen() {
+  if (!refs.canvasModal.classList.contains("is-open")) return;
+  canvasFullscreen = !canvasFullscreen;
+  syncCanvasFullscreenState();
+}
+
+function syncCanvasFullscreenState() {
+  refs.canvasModal.classList.toggle("is-fullscreen", canvasFullscreen);
+  refs.toggleCanvasFullscreen.innerHTML = getFullscreenIcon(canvasFullscreen);
+  refs.toggleCanvasFullscreen.setAttribute("aria-label", canvasFullscreen ? "退出铺满窗口" : "铺满窗口显示");
+  refs.toggleCanvasFullscreen.title = canvasFullscreen ? "退出铺满窗口" : "铺满窗口显示";
+}
+
+function renderCanvas() {
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const canvas = ensureTaskCanvas(task);
+  refs.canvasWorld.style.transform = `translate(${canvas.view.x}px, ${canvas.view.y}px) scale(${canvas.view.zoom})`;
+  refs.canvasZoomLabel.textContent = `${Math.round(canvas.view.zoom * 100)}%`;
+  syncCanvasMuteButton(canvas);
+  refs.canvasWorld.innerHTML = canvas.items.map((item) => renderCanvasItem(item, canvas)).join("");
+  refs.canvasWorld.querySelectorAll(".canvas-item").forEach((item) => bindCanvasItem(item));
+}
+
+function renderCanvasItem(item, canvas) {
+  const videoUrl = item.content ? normalizeVideoUrl(item.content) : "";
+  const body = {
+    text: `<div class="canvas-text" contenteditable="true" data-editable="true">${escapeHTML(item.content || "点击输入文字")}</div>`,
+    image: item.content
+      ? `<img src="${escapeHTML(item.content)}" alt="任务图片资料" />`
+      : `<div class="canvas-placeholder">点击工具栏选择图片，或直接拖入图片文件</div>`,
+    video: `
+      <div class="media-content">
+        ${videoUrl
+          ? isDirectVideoUrl(videoUrl)
+            ? `<video src="${escapeHTML(videoUrl)}" controls preload="metadata" ${canvas.muted !== false ? "muted" : ""}></video>`
+            : `<iframe src="${escapeHTML(videoUrl)}" title="任务视频资料" allowfullscreen loading="lazy"></iframe>`
+          : `<div class="canvas-placeholder">粘贴视频 URL 后预览</div>`}
+        <input class="canvas-url-input" type="url" value="${escapeHTML(item.content || "")}" placeholder="YouTube / B 站 / .mp4 视频链接" />
+      </div>`
+  }[item.type];
+
+  return `
+    <article class="canvas-item type-${item.type}" data-item-id="${item.id}" style="left:${item.x}px; top:${item.y}px; width:${item.width}px; min-height:${item.height}px;">
+      <div class="canvas-item-top">
+        <span>${item.type === "text" ? "文字" : item.type === "image" ? "图片" : "视频"}</span>
+        <div class="canvas-item-actions">
+          <button class="delete-canvas-item" type="button" aria-label="删除内容">×</button>
+        </div>
+      </div>
+      ${body}
+      <button class="resize-canvas-item" type="button" aria-label="调整大小"></button>
+    </article>
+  `;
+}
+
+function bindCanvasItem(element) {
+  const itemId = element.dataset.itemId;
+  element.addEventListener("pointerdown", (event) => {
+    if (event.target.closest(".resize-canvas-item, button, input, textarea") || event.target.dataset.editable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const item = findCanvasItem(itemId);
+    if (!item) return;
+    canvasPointer = {
+      mode: "item",
+      id: itemId,
+      startX: event.clientX,
+      startY: event.clientY,
+      itemX: item.x,
+      itemY: item.y
+    };
+    element.classList.add("is-moving");
+    element.setPointerCapture(event.pointerId);
+  });
+
+  element.querySelector(".resize-canvas-item").addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const item = findCanvasItem(itemId);
+    const task = findTask(activeCanvasTaskId);
+    if (!item || !task) return;
+    canvasPointer = {
+      mode: "resize",
+      id: itemId,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: item.width,
+      height: item.height,
+      zoom: ensureTaskCanvas(task).view.zoom
+    };
+    element.classList.add("is-resizing");
+    element.setPointerCapture(event.pointerId);
+  });
+
+  element.querySelector(".delete-canvas-item").addEventListener("click", () => {
+    const task = findTask(activeCanvasTaskId);
+    task.canvas.items = task.canvas.items.filter((item) => item.id !== itemId);
+    saveCanvasAndRender("已删除内容");
+  });
+
+  const editable = element.querySelector("[data-editable]");
+  if (editable) {
+    editable.addEventListener("input", () => {
+      const item = findCanvasItem(itemId);
+      if (!item) return;
+      item.content = editable.innerText.trim();
+      markCanvasSaved();
+      persist();
+    });
+  }
+
+  const urlInput = element.querySelector(".canvas-url-input");
+  if (urlInput) {
+    urlInput.addEventListener("change", () => {
+      const item = findCanvasItem(itemId);
+      if (!item) return;
+      item.content = urlInput.value.trim();
+      saveCanvasAndRender("媒体内容已更新");
+    });
+    urlInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        urlInput.blur();
+      }
+    });
+  }
+}
+
+function handleCanvasPointerDown(event) {
+  if (event.target.closest(".canvas-item")) return;
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  event.preventDefault();
+  const canvas = ensureTaskCanvas(task);
+  canvasPointer = {
+    mode: "pan",
+    startX: event.clientX,
+    startY: event.clientY,
+    viewX: canvas.view.x,
+    viewY: canvas.view.y
+  };
+  refs.infiniteCanvas.setPointerCapture(event.pointerId);
+}
+
+function handleCanvasPointerMove(event) {
+  if (!canvasPointer) return;
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const canvas = ensureTaskCanvas(task);
+  const dx = event.clientX - canvasPointer.startX;
+  const dy = event.clientY - canvasPointer.startY;
+  if (canvasPointer.mode === "pan") {
+    canvas.view.x = canvasPointer.viewX + dx;
+    canvas.view.y = canvasPointer.viewY + dy;
+    refs.canvasWorld.style.transform = `translate(${canvas.view.x}px, ${canvas.view.y}px) scale(${canvas.view.zoom})`;
+  } else if (canvasPointer.mode === "item") {
+    const item = findCanvasItem(canvasPointer.id);
+    if (!item) return;
+    item.x = Math.round(canvasPointer.itemX + dx / canvas.view.zoom);
+    item.y = Math.round(canvasPointer.itemY + dy / canvas.view.zoom);
+    const element = refs.canvasWorld.querySelector(`[data-item-id="${CSS.escape(canvasPointer.id)}"]`);
+    if (element) {
+      element.style.left = `${item.x}px`;
+      element.style.top = `${item.y}px`;
+    }
+  } else if (canvasPointer.mode === "resize") {
+    const item = findCanvasItem(canvasPointer.id);
+    if (!item) return;
+    const minSize = item.type === "text" ? { width: 180, height: 110 } : { width: 220, height: 160 };
+    item.width = Math.max(minSize.width, Math.round(canvasPointer.width + dx / canvasPointer.zoom));
+    item.height = Math.max(minSize.height, Math.round(canvasPointer.height + dy / canvasPointer.zoom));
+    const element = refs.canvasWorld.querySelector(`[data-item-id="${CSS.escape(canvasPointer.id)}"]`);
+    if (element) {
+      element.style.width = `${item.width}px`;
+      element.style.minHeight = `${item.height}px`;
+    }
+  }
+  markCanvasSaved();
+  persist();
+}
+
+function stopCanvasPointer() {
+  canvasPointer = null;
+  refs.canvasWorld.querySelectorAll(".canvas-item.is-moving").forEach((item) => item.classList.remove("is-moving"));
+  refs.canvasWorld.querySelectorAll(".canvas-item.is-resizing").forEach((item) => item.classList.remove("is-resizing"));
+  if (document.activeElement?.closest?.(".canvas-item")) {
+    document.activeElement.blur();
+  }
+}
+
+function addCanvasItem(type) {
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const canvas = ensureTaskCanvas(task);
+  let content = type === "text" ? "写下一个想法" : "";
+
+  canvas.items.push({
+    id: crypto.randomUUID(),
+    type,
+    content,
+    muted: type === "video" ? true : undefined,
+    x: Math.round((120 - canvas.view.x) / canvas.view.zoom),
+    y: Math.round((90 - canvas.view.y) / canvas.view.zoom),
+    width: type === "text" ? 260 : 340,
+    height: type === "text" ? 140 : 220
+  });
+  saveCanvasAndRender("已添加到画布");
+}
+
+function handleImageInputChange(event) {
+  const [file] = Array.from(event.target.files || []);
+  if (!file) return;
+  addMediaFileToCanvas(file);
+  event.target.value = "";
+}
+
+function handleVideoInputChange(event) {
+  const [file] = Array.from(event.target.files || []);
+  if (!file) return;
+  addMediaFileToCanvas(file);
+  event.target.value = "";
+}
+
+function handleCanvasDragOver(event) {
+  if (!hasMediaFile(event.dataTransfer)) return;
+  event.preventDefault();
+  refs.infiniteCanvas.classList.add("is-dragging-file");
+}
+
+function handleCanvasDragLeave(event) {
+  if (refs.infiniteCanvas.contains(event.relatedTarget)) return;
+  refs.infiniteCanvas.classList.remove("is-dragging-file");
+}
+
+function handleCanvasDrop(event) {
+  if (!hasMediaFile(event.dataTransfer)) return;
+  event.preventDefault();
+  refs.infiniteCanvas.classList.remove("is-dragging-file");
+  Array.from(event.dataTransfer.files)
+    .filter((file) => isSupportedMediaFile(file))
+    .forEach((file, index) => addMediaFileToCanvas(file, event, index));
+}
+
+function hasMediaFile(dataTransfer) {
+  return Array.from(dataTransfer?.items || []).some(
+    (item) => item.kind === "file" && (item.type.startsWith("image/") || item.type.startsWith("video/"))
+  );
+}
+
+function isSupportedMediaFile(file) {
+  return file.type.startsWith("image/") || file.type.startsWith("video/");
+}
+
+function addMediaFileToCanvas(file, event = null, offsetIndex = 0) {
+  if (!isSupportedMediaFile(file)) {
+    toast("请拖入图片或视频文件");
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const task = findTask(activeCanvasTaskId);
+    if (!task) return;
+    const canvas = ensureTaskCanvas(task);
+    const point = event ? getCanvasPoint(event.clientX, event.clientY) : getCanvasPointFromOffset(130, 110);
+    const isVideo = file.type.startsWith("video/");
+    canvas.items.push({
+      id: crypto.randomUUID(),
+      type: isVideo ? "video" : "image",
+      content: reader.result,
+      muted: isVideo ? true : undefined,
+      x: point.x + offsetIndex * 24,
+      y: point.y + offsetIndex * 24,
+      width: isVideo ? 420 : 360,
+      height: isVideo ? 280 : 240
+    });
+    saveCanvasAndRender(isVideo ? "视频已添加到画布" : "图片已添加到画布");
+  });
+  reader.readAsDataURL(file);
+}
+
+function getCanvasPoint(clientX, clientY) {
+  const task = findTask(activeCanvasTaskId);
+  const canvas = ensureTaskCanvas(task);
+  const rect = refs.infiniteCanvas.getBoundingClientRect();
+  return {
+    x: Math.round((clientX - rect.left - rect.width / 2 - canvas.view.x) / canvas.view.zoom),
+    y: Math.round((clientY - rect.top - rect.height / 2 - canvas.view.y) / canvas.view.zoom)
+  };
+}
+
+function getCanvasPointFromOffset(x, y) {
+  const task = findTask(activeCanvasTaskId);
+  const canvas = ensureTaskCanvas(task);
+  return {
+    x: Math.round((x - canvas.view.x) / canvas.view.zoom),
+    y: Math.round((y - canvas.view.y) / canvas.view.zoom)
+  };
+}
+
+function resetCanvasView() {
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const canvas = ensureTaskCanvas(task);
+  canvas.view = { x: 0, y: 0, zoom: 1 };
+  saveCanvasAndRender("已回到中心");
+}
+
+function zoomCanvas(delta) {
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const canvas = ensureTaskCanvas(task);
+  canvas.view.zoom = Math.min(1.6, Math.max(0.5, Number((canvas.view.zoom + delta).toFixed(2))));
+  saveCanvasAndRender();
+}
+
+function toggleCanvasMute() {
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const canvas = ensureTaskCanvas(task);
+  canvas.muted = canvas.muted === false;
+  refs.canvasWorld.querySelectorAll("video").forEach((video) => {
+    video.muted = canvas.muted !== false;
+  });
+  syncCanvasMuteButton(canvas);
+  persist();
+  toast(canvas.muted !== false ? "画布视频已静音" : "画布视频已取消静音");
+}
+
+function syncCanvasMuteButton(canvas) {
+  const isMuted = canvas.muted !== false;
+  refs.canvasMuteAll.classList.toggle("is-muted", isMuted);
+  refs.canvasMuteAll.innerHTML = getVolumeIcon(isMuted);
+  refs.canvasMuteAll.setAttribute("aria-label", isMuted ? "取消全局静音" : "全局静音");
+  refs.canvasMuteAll.title = isMuted ? "取消全局静音" : "全局静音";
+}
+
+function handleCanvasWheel(event) {
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  event.preventDefault();
+  const canvas = ensureTaskCanvas(task);
+  const oldZoom = canvas.view.zoom;
+  const nextZoom = Math.min(1.8, Math.max(0.35, Number((oldZoom + (event.deltaY > 0 ? -0.08 : 0.08)).toFixed(2))));
+  if (nextZoom === oldZoom) return;
+
+  const rect = refs.infiniteCanvas.getBoundingClientRect();
+  const pointerX = event.clientX - rect.left - rect.width / 2;
+  const pointerY = event.clientY - rect.top - rect.height / 2;
+  const worldX = (pointerX - canvas.view.x) / oldZoom;
+  const worldY = (pointerY - canvas.view.y) / oldZoom;
+
+  canvas.view.zoom = nextZoom;
+  canvas.view.x = Math.round(pointerX - worldX * nextZoom);
+  canvas.view.y = Math.round(pointerY - worldY * nextZoom);
+  refs.canvasWorld.style.transform = `translate(${canvas.view.x}px, ${canvas.view.y}px) scale(${canvas.view.zoom})`;
+  refs.canvasZoomLabel.textContent = `${Math.round(canvas.view.zoom * 100)}%`;
+  markCanvasSaved();
+  persist();
+}
+
+function saveCanvasAndRender(message = "") {
+  markCanvasSaved();
+  persist();
+  renderCanvas();
+  if (message) toast(message);
+}
+
+function markCanvasSaved() {
+  refs.canvasSaveState.textContent = "已自动保存";
+}
+
+function ensureTaskCanvas(task) {
+  if (!task.canvas || !Array.isArray(task.canvas.items)) {
+    task.canvas = createEmptyCanvas();
+  }
+  if (!task.canvas.view) {
+    task.canvas.view = { x: 0, y: 0, zoom: 1 };
+  }
+  if (typeof task.canvas.muted !== "boolean") {
+    task.canvas.muted = true;
+  }
+  return task.canvas;
+}
+
+function createEmptyCanvas() {
+  return {
+    view: { x: 0, y: 0, zoom: 1 },
+    muted: true,
+    items: []
+  };
+}
+
+function findCanvasItem(itemId) {
+  const task = findTask(activeCanvasTaskId);
+  return task?.canvas?.items?.find((item) => item.id === itemId);
+}
+
+function normalizeVideoUrl(url) {
+  const value = url.trim();
+  const youtubeMatch = value.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]+)/);
+  if (youtubeMatch) return `https://www.youtube.com/embed/${youtubeMatch[1]}`;
+  const bilibiliMatch = value.match(/bilibili\.com\/video\/([^/?#]+)/);
+  if (bilibiliMatch) return `https://player.bilibili.com/player.html?bvid=${bilibiliMatch[1]}`;
+  return removeAutoplayParam(value);
+}
+
+function getVolumeIcon(isMuted) {
+  return isMuted
+    ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.1l4.4 3.4V6.1L7.1 9.5H4Z"/><path d="m16.2 9.2 3.6 3.6m0-3.6-3.6 3.6"/></svg>`
+    : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5v5h3.1l4.4 3.4V6.1L7.1 9.5H4Z"/><path d="M15.3 8.4a5 5 0 0 1 0 7.2M17.8 6a8.4 8.4 0 0 1 0 12"/></svg>`;
+}
+
+function getFullscreenIcon(isFullscreen) {
+  return isFullscreen
+    ? `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4H5v4M15 4h4v4M9 20H5v-4M15 20h4v-4"/><path d="M9 9 5 5M15 9l4-4M9 15l-4 4M15 15l4 4"/></svg>`
+    : `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"/><path d="M4 4l6 6M20 4l-6 6M4 20l6-6M20 20l-6-6"/></svg>`;
+}
+
+function isDirectVideoUrl(url) {
+  return url.startsWith("data:video/") || /\.(mp4|webm|ogg)(\?.*)?$/i.test(url);
+}
+
+function removeAutoplayParam(url) {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.delete("autoplay");
+    parsed.searchParams.delete("autoPlay");
+    return parsed.toString();
+  } catch (_) {
+    return url.replace(/([?&])autoplay=1(&?)/i, (match, prefix, suffix) => (prefix === "?" && suffix ? "?" : prefix === "?" ? "" : suffix ? "&" : ""));
+  }
+}
+
 function bindChoiceGroups() {
   refs.choiceGroups.forEach((group) => {
     const target = byId(group.dataset.choiceFor);
@@ -692,6 +1200,7 @@ function saveTaskFromForm(event) {
     repeat: refs.taskRepeat.value,
     tags: tags.length ? tags : ["未分类"],
     pinned: refs.taskPinned.checked,
+    canvas: existingTask?.canvas || createEmptyCanvas(),
     subtasks
   };
 
@@ -904,7 +1413,8 @@ function loadState() {
         tags: ["未分类"],
         ...task,
         subtasks: Array.isArray(task.subtasks) ? task.subtasks : [],
-        tags: Array.isArray(task.tags) ? task.tags : ["未分类"]
+        tags: Array.isArray(task.tags) ? task.tags : ["未分类"],
+        canvas: task.canvas && Array.isArray(task.canvas.items) ? task.canvas : createEmptyCanvas()
       }));
       if (!Array.isArray(stored.completionHistory)) stored.completionHistory = [];
       document.body.classList.toggle("dark", stored.theme === "dark");

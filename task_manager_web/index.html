@@ -272,6 +272,45 @@
       </form>
     </div>
 
+    <div id="canvasModal" class="modal-backdrop canvas-backdrop" aria-hidden="true">
+      <section class="canvas-modal" role="dialog" aria-modal="true" aria-labelledby="canvasTitle">
+        <header class="canvas-head">
+          <div>
+            <span class="eyebrow">Task canvas</span>
+            <h2 id="canvasTitle">任务画布</h2>
+            <p id="canvasMeta">把文字、图片和视频资料铺在一张自由画布上。</p>
+          </div>
+          <div class="canvas-head-actions">
+            <button id="canvasEditTask" class="ghost-button" type="button">编辑任务</button>
+            <button id="toggleCanvasFullscreen" class="icon-button canvas-fullscreen-button" type="button" aria-label="全屏显示"></button>
+            <button id="closeCanvasModal" class="icon-button" type="button" aria-label="关闭">×</button>
+          </div>
+        </header>
+        <div class="canvas-toolbar" aria-label="画布工具">
+          <button id="addTextBlock" class="tool-button" type="button">＋ 文字</button>
+          <button id="addImageBlock" class="tool-button" type="button">＋ 图片</button>
+          <button id="addVideoBlock" class="tool-button" type="button">＋ 视频</button>
+          <button id="addVideoUrlBlock" class="tool-button" type="button">＋ 视频链接</button>
+          <button id="canvasMuteAll" class="tool-button icon-tool-button is-muted" type="button" aria-label="取消全局静音"></button>
+          <input id="canvasImageInput" type="file" accept="image/*" hidden />
+          <input id="canvasVideoInput" type="file" accept="video/*" hidden />
+          <span id="canvasSaveState">自动保存</span>
+        </div>
+        <div id="infiniteCanvas" class="infinite-canvas">
+          <div id="canvasWorld" class="canvas-world"></div>
+          <div class="canvas-hint">拖动画布空白处移动视野，拖动卡片移动内容。</div>
+        </div>
+        <footer class="canvas-footer">
+          <button id="resetCanvasView" class="ghost-button" type="button">回到中心</button>
+          <div class="zoom-controls">
+            <button id="zoomOutCanvas" class="mini-action" type="button" aria-label="缩小">−</button>
+            <span id="canvasZoomLabel">100%</span>
+            <button id="zoomInCanvas" class="mini-action" type="button" aria-label="放大">＋</button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
     <div id="toast" class="toast"></div>
     <script src="./app.js"></script>
   </body>
