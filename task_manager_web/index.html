@@ -291,6 +291,7 @@
           <button id="addImageBlock" class="tool-button" type="button">＋ 图片</button>
           <button id="addVideoBlock" class="tool-button" type="button">＋ 视频</button>
           <button id="addVideoUrlBlock" class="tool-button" type="button">＋ 视频链接</button>
+          <button id="toggleConnectMode" class="tool-button" type="button">关系线</button>
           <button id="canvasMuteAll" class="tool-button icon-tool-button is-muted" type="button" aria-label="取消全局静音"></button>
           <input id="canvasImageInput" type="file" accept="image/*" hidden />
           <input id="canvasVideoInput" type="file" accept="video/*" hidden />
@@ -298,7 +299,28 @@
         </div>
         <div id="infiniteCanvas" class="infinite-canvas">
           <div id="canvasWorld" class="canvas-world"></div>
+          <div id="canvasSelectionBox" class="canvas-selection-box" hidden></div>
           <div class="canvas-hint">拖动画布空白处移动视野，拖动卡片移动内容。</div>
+          <div id="connectionTypePicker" class="connection-type-picker" hidden>
+            <span>选择线型</span>
+            <button data-type="related" type="button">
+              <span class="line-preview line-solid"></span>
+              <strong>实线</strong>
+            </button>
+            <button data-type="sequence" type="button">
+              <span class="line-preview line-arrow"></span>
+              <strong>箭头</strong>
+            </button>
+            <button data-type="cause" type="button">
+              <span class="line-preview line-dashed"></span>
+              <strong>虚线</strong>
+            </button>
+            <button data-type="child" type="button">
+              <span class="line-preview line-branch"></span>
+              <strong>分支线</strong>
+            </button>
+          </div>
+          <input id="connectionLabelEditor" class="connection-label-editor" hidden placeholder="输入连线标注" />
         </div>
         <footer class="canvas-footer">
           <button id="resetCanvasView" class="ghost-button" type="button">回到中心</button>

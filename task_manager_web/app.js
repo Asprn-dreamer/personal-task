@@ -152,6 +152,12 @@ let draggingId = null;
 let activeCanvasTaskId = null;
 let canvasPointer = null;
 let canvasFullscreen = false;
+let connectMode = false;
+let pendingConnection = null;
+let selectedConnectionId = null;
+let selectedCanvasItemId = null;
+let selectedCanvasItemIds = new Set();
+let connectionDraftTargetId = null;
 
 const refs = {
   taskList: byId("taskList"),
@@ -188,10 +194,14 @@ const refs = {
   canvasSaveState: byId("canvasSaveState"),
   infiniteCanvas: byId("infiniteCanvas"),
   canvasWorld: byId("canvasWorld"),
+  canvasSelectionBox: byId("canvasSelectionBox"),
   canvasZoomLabel: byId("canvasZoomLabel"),
   canvasImageInput: byId("canvasImageInput"),
   canvasVideoInput: byId("canvasVideoInput"),
   canvasMuteAll: byId("canvasMuteAll"),
+  toggleConnectMode: byId("toggleConnectMode"),
+  connectionTypePicker: byId("connectionTypePicker"),
+  connectionLabelEditor: byId("connectionLabelEditor"),
   toggleCanvasFullscreen: byId("toggleCanvasFullscreen"),
   toast: byId("toast")
 };
@@ -247,6 +257,10 @@ function bindEvents() {
   byId("addImageBlock").addEventListener("click", () => refs.canvasImageInput.click());
   byId("addVideoBlock").addEventListener("click", () => refs.canvasVideoInput.click());
   byId("addVideoUrlBlock").addEventListener("click", () => addCanvasItem("video"));
+  refs.toggleConnectMode.addEventListener("click", toggleConnectMode);
+  refs.connectionTypePicker.addEventListener("click", choosePendingConnectionType);
+  refs.connectionLabelEditor.addEventListener("keydown", handleConnectionLabelKeydown);
+  refs.connectionLabelEditor.addEventListener("blur", saveConnectionLabelEdit);
   refs.canvasMuteAll.addEventListener("click", toggleCanvasMute);
   byId("resetCanvasView").addEventListener("click", resetCanvasView);
   byId("zoomOutCanvas").addEventListener("click", () => zoomCanvas(-0.1));
@@ -264,6 +278,7 @@ function bindEvents() {
   refs.infiniteCanvas.addEventListener("dragover", handleCanvasDragOver);
   refs.infiniteCanvas.addEventListener("dragleave", handleCanvasDragLeave);
   refs.infiniteCanvas.addEventListener("drop", handleCanvasDrop);
+  window.addEventListener("keydown", handleCanvasKeydown);
 
   refs.calendarGrid.addEventListener("click", (event) => {
     const button = event.target.closest("[data-date]");
@@ -702,6 +717,9 @@ function closeCanvasModal() {
   refs.canvasModal.setAttribute("aria-hidden", "true");
   activeCanvasTaskId = null;
   canvasPointer = null;
+  selectedConnectionId = null;
+  selectedCanvasItemId = null;
+  selectedCanvasItemIds = new Set();
   render();
 }
 
@@ -731,8 +749,14 @@ function renderCanvas() {
   refs.canvasWorld.style.transform = `translate(${canvas.view.x}px, ${canvas.view.y}px) scale(${canvas.view.zoom})`;
   refs.canvasZoomLabel.textContent = `${Math.round(canvas.view.zoom * 100)}%`;
   syncCanvasMuteButton(canvas);
-  refs.canvasWorld.innerHTML = canvas.items.map((item) => renderCanvasItem(item, canvas)).join("");
+  syncConnectionControls(canvas);
+  refs.canvasWorld.innerHTML = `
+    <svg class="canvas-connections" aria-hidden="true">${renderCanvasConnections(canvas)}</svg>
+    ${canvas.items.map((item) => renderCanvasItem(item, canvas)).join("")}
+  `;
   refs.canvasWorld.querySelectorAll(".canvas-item").forEach((item) => bindCanvasItem(item));
+  refs.canvasWorld.querySelectorAll("[data-connection-id]").forEach((connection) => bindCanvasConnection(connection));
+  updateSelectedCanvasItemClass();
 }
 
 function renderCanvasItem(item, canvas) {
@@ -754,23 +778,75 @@ function renderCanvasItem(item, canvas) {
   }[item.type];
 
   return `
-    <article class="canvas-item type-${item.type}" data-item-id="${item.id}" style="left:${item.x}px; top:${item.y}px; width:${item.width}px; min-height:${item.height}px;">
-      <div class="canvas-item-top">
-        <span>${item.type === "text" ? "文字" : item.type === "image" ? "图片" : "视频"}</span>
-        <div class="canvas-item-actions">
-          <button class="delete-canvas-item" type="button" aria-label="删除内容">×</button>
-        </div>
-      </div>
+    <article class="canvas-item type-${item.type}" data-item-id="${item.id}" style="left:${item.x}px; top:${item.y}px; width:${item.width}px; ${item.type === "video" ? `height:${item.height}px;` : `min-height:${item.height}px;`}">
       ${body}
+      <button class="connect-handle connect-top" data-side="top" type="button" aria-label="从上边连线"></button>
+      <button class="connect-handle connect-right" data-side="right" type="button" aria-label="从右边连线"></button>
+      <button class="connect-handle connect-bottom" data-side="bottom" type="button" aria-label="从下边连线"></button>
+      <button class="connect-handle connect-left" data-side="left" type="button" aria-label="从左边连线"></button>
       <button class="resize-canvas-item" type="button" aria-label="调整大小"></button>
     </article>
+  `;
+}
+
+function renderCanvasConnections(canvas) {
+  const validConnections = canvas.connections.filter(
+    (connection) => findCanvasItemInCanvas(canvas, connection.fromId) && findCanvasItemInCanvas(canvas, connection.toId)
+  );
+  if (validConnections.length !== canvas.connections.length) {
+    canvas.connections = validConnections;
+    persist();
+  }
+
+  return `
+    <defs>
+      <marker id="arrow-sequence" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+        <path d="M1 1 9 5 1 9Z"></path>
+      </marker>
+      <marker id="arrow-cause" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+        <path d="M1 1 9 5 1 9Z"></path>
+      </marker>
+      <marker id="arrow-child" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+        <path d="M1 1 9 5 1 9Z"></path>
+      </marker>
+    </defs>
+    ${validConnections.map((connection) => renderConnectionPath(canvas, connection)).join("")}
+    <path class="connection-line connection-draft" data-draft-connection hidden></path>
+  `;
+}
+
+function renderCanvasConnectionsOnly(canvas) {
+  const svg = refs.canvasWorld.querySelector(".canvas-connections");
+  if (!svg) return;
+  svg.innerHTML = renderCanvasConnections(canvas);
+  svg.querySelectorAll("[data-connection-id]").forEach((connection) => bindCanvasConnection(connection));
+}
+
+function renderConnectionPath(canvas, connection) {
+  const fromItem = findCanvasItemInCanvas(canvas, connection.fromId);
+  const toItem = findCanvasItemInCanvas(canvas, connection.toId);
+  const { from, to } = connection.fromSide && connection.toSide
+    ? { from: getCanvasItemAnchor(fromItem, connection.fromSide), to: getCanvasItemAnchor(toItem, connection.toSide) }
+    : getConnectionAnchors(fromItem, toItem);
+  const path = getConnectionPath(from, to);
+  const midX = (from.x + to.x) / 2;
+  const midY = (from.y + to.y) / 2;
+  return `
+    <g class="connection-group type-${connection.type} ${connection.id === selectedConnectionId ? "is-selected" : ""}" data-connection-id="${connection.id}">
+      <path class="connection-hit" d="${path}"></path>
+      <path class="connection-line" d="${path}"></path>
+      ${connection.label ? `<text class="connection-label" x="${midX}" y="${midY - 8}">${escapeHTML(connection.label)}</text>` : ""}
+    </g>
   `;
 }
 
 function bindCanvasItem(element) {
   const itemId = element.dataset.itemId;
   element.addEventListener("pointerdown", (event) => {
-    if (event.target.closest(".resize-canvas-item, button, input, textarea") || event.target.dataset.editable) return;
+    if (!selectedCanvasItemIds.has(itemId)) {
+      selectCanvasItem(itemId);
+    }
+    if (event.target.closest(".resize-canvas-item, .connect-handle, button, input, textarea") || event.target.dataset.editable) return;
     event.preventDefault();
     event.stopPropagation();
     const item = findCanvasItem(itemId);
@@ -781,10 +857,35 @@ function bindCanvasItem(element) {
       startX: event.clientX,
       startY: event.clientY,
       itemX: item.x,
-      itemY: item.y
+      itemY: item.y,
+      groupItems: getSelectedCanvasItemsSnapshot()
     };
     element.classList.add("is-moving");
     element.setPointerCapture(event.pointerId);
+  });
+
+  element.querySelectorAll(".connect-handle").forEach((handle) => {
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const item = findCanvasItem(itemId);
+      if (!item) return;
+      hideConnectionTypePicker();
+      hideConnectionLabelEditor(false);
+      selectedConnectionId = null;
+      connectionDraftTargetId = null;
+      updateSelectedConnectionClass();
+      const side = handle.dataset.side || "right";
+      const start = getCanvasItemAnchor(item, side);
+      canvasPointer = {
+        mode: "connect",
+        id: itemId,
+        fromSide: side,
+        start
+      };
+      element.classList.add("is-connecting");
+      updateDraftConnection(start, getCanvasPoint(event.clientX, event.clientY));
+    });
   });
 
   element.querySelector(".resize-canvas-item").addEventListener("pointerdown", (event) => {
@@ -804,12 +905,6 @@ function bindCanvasItem(element) {
     };
     element.classList.add("is-resizing");
     element.setPointerCapture(event.pointerId);
-  });
-
-  element.querySelector(".delete-canvas-item").addEventListener("click", () => {
-    const task = findTask(activeCanvasTaskId);
-    task.canvas.items = task.canvas.items.filter((item) => item.id !== itemId);
-    saveCanvasAndRender("已删除内容");
   });
 
   const editable = element.querySelector("[data-editable]");
@@ -840,12 +935,60 @@ function bindCanvasItem(element) {
   }
 }
 
+function bindCanvasConnection(element) {
+  element.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+
+  element.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedCanvasItemId = null;
+    selectedCanvasItemIds = new Set();
+    updateSelectedCanvasItemClass();
+    selectedConnectionId = element.dataset.connectionId;
+    updateSelectedConnectionClass();
+  });
+
+  element.addEventListener("dblclick", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    selectedCanvasItemId = null;
+    selectedCanvasItemIds = new Set();
+    updateSelectedCanvasItemClass();
+    selectedConnectionId = element.dataset.connectionId;
+    startConnectionLabelEdit(selectedConnectionId, event.clientX, event.clientY);
+  });
+}
+
 function handleCanvasPointerDown(event) {
-  if (event.target.closest(".canvas-item")) return;
+  if (event.target.closest(".canvas-item, .connection-group, .connection-type-picker, .connection-label-editor")) return;
   const task = findTask(activeCanvasTaskId);
   if (!task) return;
   event.preventDefault();
+  selectedConnectionId = null;
+  selectedCanvasItemId = null;
+  selectedCanvasItemIds = new Set();
+  hideConnectionLabelEditor(false);
+  hideConnectionTypePicker();
+  updateSelectedCanvasItemClass();
+  renderCanvasConnectionsOnly(ensureTaskCanvas(task));
   const canvas = ensureTaskCanvas(task);
+  if (event.ctrlKey || event.metaKey) {
+    const start = { x: event.clientX, y: event.clientY };
+    const canvasStart = getCanvasPoint(event.clientX, event.clientY);
+    canvasPointer = {
+      mode: "select",
+      start,
+      current: start,
+      canvasStart,
+      canvasCurrent: canvasStart
+    };
+    updateCanvasSelectionBox(start, start);
+    refs.infiniteCanvas.setPointerCapture(event.pointerId);
+    return;
+  }
   canvasPointer = {
     mode: "pan",
     startX: event.clientX,
@@ -868,15 +1011,19 @@ function handleCanvasPointerMove(event) {
     canvas.view.y = canvasPointer.viewY + dy;
     refs.canvasWorld.style.transform = `translate(${canvas.view.x}px, ${canvas.view.y}px) scale(${canvas.view.zoom})`;
   } else if (canvasPointer.mode === "item") {
-    const item = findCanvasItem(canvasPointer.id);
-    if (!item) return;
-    item.x = Math.round(canvasPointer.itemX + dx / canvas.view.zoom);
-    item.y = Math.round(canvasPointer.itemY + dy / canvas.view.zoom);
-    const element = refs.canvasWorld.querySelector(`[data-item-id="${CSS.escape(canvasPointer.id)}"]`);
-    if (element) {
-      element.style.left = `${item.x}px`;
-      element.style.top = `${item.y}px`;
-    }
+    const moveItems = canvasPointer.groupItems?.length ? canvasPointer.groupItems : [{ id: canvasPointer.id, x: canvasPointer.itemX, y: canvasPointer.itemY }];
+    moveItems.forEach((snapshot) => {
+      const item = findCanvasItem(snapshot.id);
+      if (!item) return;
+      item.x = Math.round(snapshot.x + dx / canvas.view.zoom);
+      item.y = Math.round(snapshot.y + dy / canvas.view.zoom);
+      const element = refs.canvasWorld.querySelector(`[data-item-id="${CSS.escape(snapshot.id)}"]`);
+      if (element) {
+        element.style.left = `${item.x}px`;
+        element.style.top = `${item.y}px`;
+      }
+    });
+    renderCanvasConnectionsOnly(canvas);
   } else if (canvasPointer.mode === "resize") {
     const item = findCanvasItem(canvasPointer.id);
     if (!item) return;
@@ -886,20 +1033,477 @@ function handleCanvasPointerMove(event) {
     const element = refs.canvasWorld.querySelector(`[data-item-id="${CSS.escape(canvasPointer.id)}"]`);
     if (element) {
       element.style.width = `${item.width}px`;
-      element.style.minHeight = `${item.height}px`;
+      if (item.type === "video") {
+        element.style.height = `${item.height}px`;
+      } else {
+        element.style.minHeight = `${item.height}px`;
+      }
     }
+    renderCanvasConnectionsOnly(canvas);
+  } else if (canvasPointer.mode === "connect") {
+    const target = getConnectionTargetFromPoint(event.clientX, event.clientY, canvasPointer.id);
+    setConnectionDraftTarget(target?.dataset.itemId || null);
+    if (target) {
+      const fromItem = findCanvasItem(canvasPointer.id);
+      const toItem = findCanvasItem(target.dataset.itemId);
+      if (fromItem && toItem) {
+        const targetSide = getNearestCanvasItemSide(toItem, getCanvasPoint(event.clientX, event.clientY));
+        updateDraftConnection(getCanvasItemAnchor(fromItem, canvasPointer.fromSide || "right"), getCanvasItemAnchor(toItem, targetSide));
+      }
+    } else {
+      updateDraftConnection(canvasPointer.start, getCanvasPoint(event.clientX, event.clientY));
+    }
+  } else if (canvasPointer.mode === "select") {
+    canvasPointer.current = { x: event.clientX, y: event.clientY };
+    canvasPointer.canvasCurrent = getCanvasPoint(event.clientX, event.clientY);
+    updateCanvasSelectionBox(canvasPointer.start, canvasPointer.current);
+    selectCanvasItemsInRect(getCanvasRectFromPoints(canvasPointer.canvasStart, canvasPointer.canvasCurrent), canvas);
   }
   markCanvasSaved();
   persist();
 }
 
-function stopCanvasPointer() {
+function stopCanvasPointer(event) {
+  if (canvasPointer?.mode === "connect") {
+    finishCanvasConnection(event);
+  }
+  if (canvasPointer?.mode === "select") {
+    hideCanvasSelectionBox();
+  }
   canvasPointer = null;
+  setConnectionDraftTarget(null);
   refs.canvasWorld.querySelectorAll(".canvas-item.is-moving").forEach((item) => item.classList.remove("is-moving"));
   refs.canvasWorld.querySelectorAll(".canvas-item.is-resizing").forEach((item) => item.classList.remove("is-resizing"));
+  refs.canvasWorld.querySelectorAll(".canvas-item.is-connecting").forEach((item) => item.classList.remove("is-connecting"));
+  updateDraftConnection(null);
   if (document.activeElement?.closest?.(".canvas-item")) {
     document.activeElement.blur();
   }
+}
+
+function finishCanvasConnection(event) {
+  const task = findTask(activeCanvasTaskId);
+  if (!task || !event) return;
+  const canvas = ensureTaskCanvas(task);
+  const targetCard = getConnectionTargetFromPoint(event.clientX, event.clientY, canvasPointer.id);
+  const toId = targetCard?.dataset.itemId;
+  if (!toId || toId === canvasPointer.id) return;
+  pendingConnection = {
+    fromId: canvasPointer.id,
+    toId,
+    fromSide: canvasPointer.fromSide || "right",
+    toSide: getNearestCanvasItemSide(findCanvasItemInCanvas(canvas, toId), getCanvasPoint(event.clientX, event.clientY)),
+    clientX: event.clientX,
+    clientY: event.clientY
+  };
+  showConnectionTypePicker(event.clientX, event.clientY);
+}
+
+function updateCanvasSelectionBox(start, end) {
+  const rect = getCanvasRectFromPoints(start, end);
+  const bounds = refs.infiniteCanvas.getBoundingClientRect();
+  refs.canvasSelectionBox.hidden = false;
+  refs.canvasSelectionBox.style.left = `${rect.x - bounds.left}px`;
+  refs.canvasSelectionBox.style.top = `${rect.y - bounds.top}px`;
+  refs.canvasSelectionBox.style.width = `${rect.width}px`;
+  refs.canvasSelectionBox.style.height = `${rect.height}px`;
+}
+
+function hideCanvasSelectionBox() {
+  refs.canvasSelectionBox.hidden = true;
+  refs.canvasSelectionBox.removeAttribute("style");
+}
+
+function getCanvasRectFromPoints(start, end) {
+  const x = Math.min(start.x, end.x);
+  const y = Math.min(start.y, end.y);
+  return {
+    x,
+    y,
+    width: Math.abs(end.x - start.x),
+    height: Math.abs(end.y - start.y)
+  };
+}
+
+function selectCanvasItemsInRect(rect, canvas) {
+  selectedCanvasItemIds = new Set(
+    canvas.items
+      .filter((item) => rectsIntersect(rect, { x: item.x, y: item.y, width: item.width, height: item.height }))
+      .map((item) => item.id)
+  );
+  selectedCanvasItemId = selectedCanvasItemIds.size === 1 ? Array.from(selectedCanvasItemIds)[0] : null;
+  selectedConnectionId = null;
+  updateSelectedConnectionClass();
+  updateSelectedCanvasItemClass();
+}
+
+function rectsIntersect(a, b) {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+function getSelectedCanvasItemsSnapshot() {
+  const task = findTask(activeCanvasTaskId);
+  if (!task || !selectedCanvasItemIds.size) return [];
+  return ensureTaskCanvas(task).items
+    .filter((item) => selectedCanvasItemIds.has(item.id))
+    .map((item) => ({ id: item.id, x: item.x, y: item.y }));
+}
+
+function updateDraftConnection(from, to = null, type = "related") {
+  const draft = refs.canvasWorld.querySelector("[data-draft-connection]");
+  if (!draft) return;
+  if (!from || !to) {
+    draft.setAttribute("hidden", "");
+    draft.removeAttribute("d");
+    return;
+  }
+  draft.removeAttribute("hidden");
+  draft.setAttribute("d", getConnectionPath(from, to));
+  draft.setAttribute("class", `connection-line connection-draft type-${type}`);
+}
+
+function getConnectionTargetFromPoint(clientX, clientY, fromId) {
+  const element = document.elementFromPoint(clientX, clientY);
+  return element?.closest?.(".canvas-item:not(.is-connecting)")?.dataset.itemId === fromId
+    ? null
+    : element?.closest?.(".canvas-item:not(.is-connecting)") || null;
+}
+
+function setConnectionDraftTarget(itemId) {
+  if (connectionDraftTargetId === itemId) return;
+  connectionDraftTargetId = itemId;
+  refs.canvasWorld.querySelectorAll(".canvas-item.is-connect-target").forEach((item) => {
+    item.classList.toggle("is-connect-target", item.dataset.itemId === itemId);
+  });
+  if (itemId) {
+    refs.canvasWorld.querySelector(`[data-item-id="${CSS.escape(itemId)}"]`)?.classList.add("is-connect-target");
+  }
+}
+
+function getConnectionAnchors(fromItem, toItem) {
+  const fromCenter = getCanvasItemAnchor(fromItem, "center");
+  const toCenter = getCanvasItemAnchor(toItem, "center");
+  const horizontal = Math.abs(toCenter.x - fromCenter.x) >= Math.abs(toCenter.y - fromCenter.y);
+  if (horizontal) {
+    return toCenter.x >= fromCenter.x
+      ? { from: getCanvasItemAnchor(fromItem, "right"), to: getCanvasItemAnchor(toItem, "left") }
+      : { from: getCanvasItemAnchor(fromItem, "left"), to: getCanvasItemAnchor(toItem, "right") };
+  }
+  return toCenter.y >= fromCenter.y
+    ? { from: getCanvasItemAnchor(fromItem, "bottom"), to: getCanvasItemAnchor(toItem, "top") }
+    : { from: getCanvasItemAnchor(fromItem, "top"), to: getCanvasItemAnchor(toItem, "bottom") };
+}
+
+function getNearestCanvasItemSide(item, point) {
+  const distances = [
+    { side: "left", value: Math.abs(point.x - item.x) },
+    { side: "right", value: Math.abs(point.x - (item.x + item.width)) },
+    { side: "top", value: Math.abs(point.y - item.y) },
+    { side: "bottom", value: Math.abs(point.y - (item.y + item.height)) }
+  ];
+  return distances.sort((a, b) => a.value - b.value)[0].side;
+}
+
+function getCanvasItemAnchor(item, side) {
+  const centerX = item.x + item.width / 2;
+  const centerY = item.y + item.height / 2;
+  if (side === "center") return { x: centerX, y: centerY, side };
+  if (side === "left") return { x: item.x, y: centerY, side };
+  if (side === "right") return { x: item.x + item.width, y: centerY, side };
+  if (side === "top") return { x: centerX, y: item.y, side };
+  if (side === "bottom") return { x: centerX, y: item.y + item.height, side };
+  return {
+    x: centerX,
+    y: centerY,
+    side: "center"
+  };
+}
+
+function getConnectionPath(from, to) {
+  const padding = getConnectionPadding(from, to);
+  const start = offsetPointBySide(from, padding);
+  const end = offsetPointBySide(to, padding);
+  const points = simplifyPolyline([
+    from,
+    start,
+    ...getOrthogonalBridgePoints(start, end),
+    end,
+    to
+  ]);
+  return getRoundedPolylinePath(points, Math.min(16, Math.max(8, padding * 0.5)));
+}
+
+function getConnectionPadding(from, to) {
+  const dx = Math.abs(to.x - from.x);
+  const dy = Math.abs(to.y - from.y);
+  const distance = Math.hypot(dx, dy);
+  const sameAxis = isHorizontalSide(from.side) === isHorizontalSide(to.side);
+  const base = sameAxis ? Math.min(dx, dy || dx) : Math.min(dx || dy, dy || dx);
+  return Math.max(14, Math.min(42, distance * 0.18, base * 0.45 || 42));
+}
+
+function offsetPointBySide(point, distance) {
+  const direction = {
+    left: { x: -1, y: 0 },
+    right: { x: 1, y: 0 },
+    top: { x: 0, y: -1 },
+    bottom: { x: 0, y: 1 },
+    center: { x: 0, y: 0 }
+  }[point.side || "center"];
+  return {
+    x: point.x + direction.x * distance,
+    y: point.y + direction.y * distance,
+    side: point.side
+  };
+}
+
+function getOrthogonalBridgePoints(start, end) {
+  const startHorizontal = isHorizontalSide(start.side);
+  const endHorizontal = isHorizontalSide(end.side);
+  const closeX = Math.abs(end.x - start.x) < 36;
+  const closeY = Math.abs(end.y - start.y) < 36;
+  if (startHorizontal && endHorizontal && closeX) {
+    return [{ x: start.x, y: end.y }];
+  }
+  if (!startHorizontal && !endHorizontal && closeY) {
+    return [{ x: end.x, y: start.y }];
+  }
+  if (startHorizontal && endHorizontal) {
+    const midX = (start.x + end.x) / 2;
+    return [{ x: midX, y: start.y }, { x: midX, y: end.y }];
+  }
+  if (!startHorizontal && !endHorizontal) {
+    const midY = (start.y + end.y) / 2;
+    return [{ x: start.x, y: midY }, { x: end.x, y: midY }];
+  }
+  return [{ x: end.x, y: start.y }];
+}
+
+function isHorizontalSide(side) {
+  return side === "left" || side === "right";
+}
+
+function simplifyPolyline(points) {
+  const uniquePoints = points.filter((point, index, list) => {
+    const prev = list[index - 1];
+    return !prev || prev.x !== point.x || prev.y !== point.y;
+  });
+  return uniquePoints.filter((point, index, list) => {
+    const prev = list[index - 1];
+    const next = list[index + 1];
+    if (!prev || !next) return true;
+    const sameVertical = prev.x === point.x && point.x === next.x;
+    const sameHorizontal = prev.y === point.y && point.y === next.y;
+    return !sameVertical && !sameHorizontal;
+  });
+}
+
+function getRoundedPolylinePath(points, radius) {
+  if (points.length < 2) return "";
+  const commands = [`M ${points[0].x} ${points[0].y}`];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const prev = points[index - 1];
+    const current = points[index];
+    const next = points[index + 1];
+    const prevDistance = Math.hypot(current.x - prev.x, current.y - prev.y);
+    const nextDistance = Math.hypot(next.x - current.x, next.y - current.y);
+    const cornerRadius = Math.min(radius, prevDistance / 2, nextDistance / 2);
+    if (!cornerRadius) {
+      commands.push(`L ${current.x} ${current.y}`);
+      continue;
+    }
+    const before = moveToward(current, prev, cornerRadius);
+    const after = moveToward(current, next, cornerRadius);
+    commands.push(`L ${before.x} ${before.y}`);
+    commands.push(`Q ${current.x} ${current.y} ${after.x} ${after.y}`);
+  }
+  const last = points[points.length - 1];
+  commands.push(`L ${last.x} ${last.y}`);
+  return commands.join(" ");
+}
+
+function moveToward(from, to, distance) {
+  const total = Math.hypot(to.x - from.x, to.y - from.y) || 1;
+  return {
+    x: from.x + ((to.x - from.x) / total) * distance,
+    y: from.y + ((to.y - from.y) / total) * distance
+  };
+}
+
+function findCanvasItemInCanvas(canvas, itemId) {
+  return canvas.items.find((item) => item.id === itemId);
+}
+
+function getConnectionLabel(type) {
+  return {
+    related: "",
+    sequence: "",
+    cause: "",
+    child: ""
+  }[type] || "";
+}
+
+function showConnectionTypePicker(clientX, clientY) {
+  const rect = refs.infiniteCanvas.getBoundingClientRect();
+  refs.connectionTypePicker.style.left = `${Math.min(rect.width - 250, Math.max(12, clientX - rect.left + 12))}px`;
+  refs.connectionTypePicker.style.top = `${Math.min(rect.height - 148, Math.max(12, clientY - rect.top + 12))}px`;
+  refs.connectionTypePicker.hidden = false;
+}
+
+function hideConnectionTypePicker() {
+  refs.connectionTypePicker.hidden = true;
+  pendingConnection = null;
+}
+
+function choosePendingConnectionType(event) {
+  const button = event.target.closest("[data-type]");
+  if (!button || !pendingConnection) return;
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const canvas = ensureTaskCanvas(task);
+  const type = button.dataset.type;
+  const exists = canvas.connections.some(
+    (connection) => connection.fromId === pendingConnection.fromId && connection.toId === pendingConnection.toId && connection.type === type
+  );
+  if (exists) {
+    toast("这条连线已经存在");
+    hideConnectionTypePicker();
+    return;
+  }
+  const connection = {
+    id: crypto.randomUUID(),
+    fromId: pendingConnection.fromId,
+    toId: pendingConnection.toId,
+    fromSide: pendingConnection.fromSide,
+    toSide: pendingConnection.toSide,
+    type,
+    label: getConnectionLabel(type)
+  };
+  canvas.connections.push(connection);
+  selectedConnectionId = connection.id;
+  hideConnectionTypePicker();
+  saveCanvasAndRender("连线已创建");
+}
+
+function startConnectionLabelEdit(connectionId, clientX, clientY) {
+  const task = findTask(activeCanvasTaskId);
+  if (!task) return;
+  const connection = ensureTaskCanvas(task).connections.find((item) => item.id === connectionId);
+  if (!connection) return;
+  const rect = refs.infiniteCanvas.getBoundingClientRect();
+  refs.connectionLabelEditor.dataset.connectionId = connectionId;
+  refs.connectionLabelEditor.value = connection.label || "";
+  refs.connectionLabelEditor.style.left = `${Math.min(rect.width - 220, Math.max(12, clientX - rect.left - 80))}px`;
+  refs.connectionLabelEditor.style.top = `${Math.min(rect.height - 48, Math.max(12, clientY - rect.top - 18))}px`;
+  refs.connectionLabelEditor.hidden = false;
+  refs.connectionLabelEditor.focus();
+  refs.connectionLabelEditor.select();
+}
+
+function handleConnectionLabelKeydown(event) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    saveConnectionLabelEdit();
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    hideConnectionLabelEditor(false);
+  }
+}
+
+function saveConnectionLabelEdit() {
+  if (refs.connectionLabelEditor.hidden) return;
+  const task = findTask(activeCanvasTaskId);
+  const connectionId = refs.connectionLabelEditor.dataset.connectionId;
+  const connection = task ? ensureTaskCanvas(task).connections.find((item) => item.id === connectionId) : null;
+  if (connection) {
+    connection.label = refs.connectionLabelEditor.value.trim();
+    persist();
+    renderCanvasConnectionsOnly(ensureTaskCanvas(task));
+  }
+  hideConnectionLabelEditor(false);
+}
+
+function hideConnectionLabelEditor(save = true) {
+  if (save) saveConnectionLabelEdit();
+  refs.connectionLabelEditor.hidden = true;
+  refs.connectionLabelEditor.dataset.connectionId = "";
+}
+
+function handleCanvasKeydown(event) {
+  if (!refs.canvasModal.classList.contains("is-open")) return;
+  if (isTypingTarget(event.target)) return;
+  if (event.key !== "Delete" && event.key !== "Backspace") return;
+  if (selectedConnectionId) {
+    event.preventDefault();
+    deleteSelectedConnection();
+    return;
+  }
+  if (selectedCanvasItemIds.size) {
+    event.preventDefault();
+    deleteSelectedCanvasItem();
+  }
+}
+
+function isTypingTarget(target) {
+  return Boolean(target?.closest?.("input, textarea, [contenteditable='true']"));
+}
+
+function deleteSelectedConnection() {
+  const task = findTask(activeCanvasTaskId);
+  if (!task || !selectedConnectionId) return;
+  const canvas = ensureTaskCanvas(task);
+  canvas.connections = canvas.connections.filter((connection) => connection.id !== selectedConnectionId);
+  selectedConnectionId = null;
+  saveCanvasAndRender("连线已删除");
+}
+
+function updateSelectedConnectionClass() {
+  refs.canvasWorld.querySelectorAll("[data-connection-id]").forEach((connection) => {
+    connection.classList.toggle("is-selected", connection.dataset.connectionId === selectedConnectionId);
+  });
+}
+
+function selectCanvasItem(itemId) {
+  selectedCanvasItemId = itemId;
+  selectedCanvasItemIds = new Set([itemId]);
+  selectedConnectionId = null;
+  updateSelectedConnectionClass();
+  updateSelectedCanvasItemClass();
+}
+
+function deleteSelectedCanvasItem() {
+  const task = findTask(activeCanvasTaskId);
+  if (!task || !selectedCanvasItemIds.size) return;
+  const canvas = ensureTaskCanvas(task);
+  const deletedIds = new Set(selectedCanvasItemIds);
+  canvas.items = canvas.items.filter((item) => !deletedIds.has(item.id));
+  canvas.connections = canvas.connections.filter(
+    (connection) => !deletedIds.has(connection.fromId) && !deletedIds.has(connection.toId)
+  );
+  selectedCanvasItemId = null;
+  selectedCanvasItemIds = new Set();
+  saveCanvasAndRender(deletedIds.size > 1 ? "卡片已批量删除" : "卡片已删除");
+}
+
+function updateSelectedCanvasItemClass() {
+  refs.canvasWorld.querySelectorAll(".canvas-item").forEach((item) => {
+    item.classList.toggle("is-selected", selectedCanvasItemIds.has(item.dataset.itemId));
+  });
+}
+
+function toggleConnectMode() {
+  connectMode = !connectMode;
+  const task = findTask(activeCanvasTaskId);
+  if (task) syncConnectionControls(ensureTaskCanvas(task));
+  toast(connectMode ? "关系线辅助已开启" : "关系线辅助已关闭");
+}
+
+function syncConnectionControls(canvas) {
+  refs.toggleConnectMode.classList.toggle("is-active", connectMode);
+  refs.toggleConnectMode.textContent = connectMode ? "选择节点" : "关系线";
+  refs.toggleConnectMode.title = "从卡片四边圆点拖到另一张卡片即可创建关系线";
+  refs.canvasWorld.classList.toggle("is-connect-mode", connectMode);
 }
 
 function addCanvasItem(type) {
@@ -1090,6 +1694,9 @@ function ensureTaskCanvas(task) {
   if (!task.canvas.view) {
     task.canvas.view = { x: 0, y: 0, zoom: 1 };
   }
+  if (!Array.isArray(task.canvas.connections)) {
+    task.canvas.connections = [];
+  }
   if (typeof task.canvas.muted !== "boolean") {
     task.canvas.muted = true;
   }
@@ -1100,6 +1707,7 @@ function createEmptyCanvas() {
   return {
     view: { x: 0, y: 0, zoom: 1 },
     muted: true,
+    connections: [],
     items: []
   };
 }
